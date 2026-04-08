@@ -1,0 +1,16 @@
+{
+  "name": "shri-laxmi-bot",
+  "version": "2.0.0",
+  "description": "WhatsApp Sales Bot using Baileys Library",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "6.6.0",
+    "qrcode-terminal": "^0.12.0",
+    "xlsx": "^0.18.5",
+    "firebase-admin": "^11.0.0",
+    "pino": "^8.19.0"
+  }
+}
