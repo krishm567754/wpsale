@@ -1,0 +1,33 @@
+name: Shri Laxmi Bot Runner
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: # This allows you to start it manually from the 'Actions' tab
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Chrome (for WhatsApp Web)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Run WhatsApp Bot
+        run: node index.js
+        env:
+          # If you used secret variables for Firebase, they go here
+          FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
