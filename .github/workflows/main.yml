@@ -1,0 +1,36 @@
+name: Shri Laxmi Bot Runner
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: 
+  schedule:
+    - cron: '0 */5 * * *' # Restarts every 5 hours to stay alive
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Keeps compatibility while forcing 24 environment
+
+      - name: Install Google Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Start Bot
+        env:
+          FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
+        run: node index.js
