@@ -1,0 +1,10 @@
+{
+  "name": "shri-laxmi-auto-vercel-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp AI Bot via Evolution API + Vercel",
+  "dependencies": {
+    "firebase-admin": "^12.2.0",
+    "node-fetch": "^2.7.0",
+    "xlsx": "^0.18.5"
+  }
+}
