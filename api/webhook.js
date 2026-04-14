@@ -7,7 +7,7 @@ let globalCache = null;
 let lastCacheTime = 0;
 let memoryPending = {};
 
-// â”€â”€â”€ FIREBASE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── FIREBASE ──────────────────────────────────────────────────────────────
 function getFirebase() {
     if (db) return db;
     try {
@@ -24,7 +24,7 @@ function sanitizePath(str) { return str.replace(/[@.\[\]#\$\/]/g, '_'); }
 
 async function getSystemPrompt() {
     var d = getFirebase();
-    var def = 'Tu Laxmi hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf data se exact rate batao. 0.9L aur 900ml dono same hote hain.\n2. Exact Size ki value batayein jo user ne puchi hai.\n3. Format:\n*Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n4. Text Hinglish me rakho.\n5. IMPORTANT: Emojis ya special symbols bilkul use mat karo. Rupee sign ki jagah sirf "Rs." likho.';
+    var def = 'Tu Laxmi hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf CONTEXT DATA se jawab de. Kuch bhi invent mat kar.\n2. 0.9L aur 900ml dono same hote hain.\n3. Exact Size ki value batayein jo user ne puchi hai.\n4. Format: *Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n5. Text Hinglish me rakho.\n6. Emojis ya special symbols bilkul use mat karo. Rupee sign ki jagah sirf "Rs." likho.\n7. Agar data na mile to exactly likho: "Please wait, admin will reply soon."';
     if (!d) return def;
     try { var s = await d.ref('botConfig/systemPrompt').get(); return s.exists() ? s.val() : def; } catch (e) { return def; }
 }
@@ -32,10 +32,10 @@ async function saveSystemPrompt(p) { var d = getFirebase(); if (d) { try { await
 async function getPDFList() { var d = getFirebase(); if (!d) return {}; try { var s = await d.ref('botConfig/pdfFiles').get(); return s.exists() ? s.val() : {}; } catch(e){ return {}; } }
 async function savePDFList(data) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/pdfFiles').set(data); } catch(e){} } }
 
-// â”€â”€â”€ HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── HELPERS ───────────────────────────────────────────────────────────────
 function sanitizeReply(t) {
     if (!t) return '';
-    return t.replace(/[âŒâœ…âœ¨ðŸ”ðŸ“„ðŸ“‹ðŸ“ŠðŸ’°]/g, '').replace(/Ã¢â€šÂ¹/g, 'Rs.').replace(/â‚¹/g, 'Rs.').replace(/Ã°Å¸[^\s]*/g, '').replace(/\*\*/g, '*').replace(/\n{3,}/g, '\n\n').split('\n').map(function(l){return l.trim();}).join('\n').trim();
+    return t.replace(/[❌✅✨🔍📄📋📊💰]/g, '').replace(/₹/g, 'Rs.').replace(/\*\*/g, '*').replace(/\n{3,}/g, '\n\n').split('\n').map(function(l){return l.trim();}).join('\n').trim();
 }
 
 function cleanDate(val) {
@@ -51,7 +51,7 @@ function getDateObj(val) {
     return isNaN(dt.getTime()) ? null : dt;
 }
 
-// â”€â”€â”€ SIZE NORMALIZER (same as before) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── SIZE NORMALIZER ───────────────────────────────────────────────────────
 function normalizeSizeHeader(header) {
     if (!header) return '';
     var h = String(header).toLowerCase().replace(/\s+/g,'').replace(/\/+$/,'').replace(/\\+$/,'');
@@ -60,7 +60,7 @@ function normalizeSizeHeader(header) {
     return map[h] || String(header).trim().toUpperCase();
 }
 
-// â”€â”€â”€ PRICE LIST LOADER (same as before) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── PRICE LIST LOADER ─────────────────────────────────────────────────────
 function loadPriceListFromExcel(wb) {
     var priceMap = {};
     for (var s = 0; s < wb.SheetNames.length; s++) {
@@ -89,7 +89,7 @@ function loadPriceListFromExcel(wb) {
     return priceMap;
 }
 
-// â”€â”€â”€ PRODUCT SEARCH (same as before) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── PRODUCT SEARCH ────────────────────────────────────────────────────────
 function searchProducts(query, mrpMap, dlpMap) {
     var q = query.toLowerCase().replace(/[^a-z0-9]/g, ' ');
     var stopWords = ['price','rate','mrp','dlp','kya','hai','batao','aur','ka','ke','liye','ye','pucha','list'];
@@ -126,7 +126,7 @@ function searchProducts(query, mrpMap, dlpMap) {
     return products.slice(0, 5);
 }
 
-// â”€â”€â”€ INVOICE SEARCH (same as before) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── INVOICE SEARCH ────────────────────────────────────────────────────────
 function searchInvoices(query, invoiceMap) {
     var q = query.replace(/[^a-zA-Z0-9\/\- ]/g, '').toLowerCase().trim();
     if (/^\d{1,2}$/.test(q) || q.length < 3) return [];
@@ -146,29 +146,32 @@ function searchInvoices(query, invoiceMap) {
     return matches.slice(0, 5);
 }
 
-// â”€â”€â”€ CUSTOMER SEARCH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── CUSTOMER SEARCH (Improved for partial matches) ────────────────────────
 function searchCustomers(query, invoiceMap) {
     var q = query.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
-    var stopWords = ['ka','ki','ke','ko','batao','dikhao','data','report','invoice','bill','total','volume','wale','wali','mahine','month','week','hafte'];
+    var stopWords = ['ka','ki','ke','ko','batao','dikhao','data','report','invoice','bill','total','volume','wale','wali','mahine','month','week','hafte','is','this','last','pichle','aaj','today'];
     var words = q.split(/\s+/).filter(function(w){ return w.length > 2 && stopWords.indexOf(w) === -1; });
     if (words.length === 0) return [];
+    
     var custSet = {};
     for (var inv in invoiceMap) {
         var cName = invoiceMap[inv][0]['Customer Name'];
         if (cName) custSet[cName] = true;
     }
+    
     var matches = [];
     for (var cName in custSet) {
         var cLower = cName.toLowerCase().replace(/[^a-z0-9 ]/g, '');
         var score = words.filter(function(w){ return cLower.indexOf(w) !== -1; }).length;
-        if (score > 0) matches.push({ name: cName, score: score });
+        // Also check if any single word is a strong match (>=3 chars)
+        var strongMatch = words.some(function(w){ return w.length >= 3 && cLower.indexOf(w) !== -1; });
+        if (score > 0 || strongMatch) matches.push({ name: cName, score: score + (strongMatch ? 1 : 0) });
     }
     matches.sort(function(a,b){ return b.score - a.score; });
     return matches.slice(0, 5);
 }
 
-// â”€â”€â”€ NEW: SMART QUERY DETECTOR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// AI ki zaroorat nahi â€” code se hi intent detect karo
+// ─── SMART QUERY DETECTOR ──────────────────────────────────────────────────
 function detectQueryIntent(text) {
     var lower = text.toLowerCase();
 
@@ -204,7 +207,7 @@ function detectQueryIntent(text) {
     return { type: 'general' };
 }
 
-// â”€â”€â”€ NEW: DATE FILTER FUNCTION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── DATE FILTER FUNCTIONS ─────────────────────────────────────────────────
 function getDateRange(filter) {
     var now   = new Date();
     var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -238,7 +241,7 @@ function isInRange(dateVal, range) {
     return dt >= range.from && dt <= range.to;
 }
 
-// â”€â”€â”€ NEW: CUSTOMER REPORT (with date filter) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── CUSTOMER REPORT (with date filter) ────────────────────────────────────
 function getCustomerReport(custName, invoiceMap, dateFilter) {
     var range = getDateRange(dateFilter);
     var filtered = [];
@@ -281,7 +284,7 @@ function getCustomerReport(custName, invoiceMap, dateFilter) {
     return msg;
 }
 
-// â”€â”€â”€ NEW: TOP CUSTOMERS REPORT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── TOP CUSTOMERS REPORT ──────────────────────────────────────────────────
 function getTopCustomers(invoiceMap, dateFilter, limit) {
     limit = limit || 5;
     var range   = getDateRange(dateFilter);
@@ -311,7 +314,7 @@ function getTopCustomers(invoiceMap, dateFilter, limit) {
     return msg;
 }
 
-// â”€â”€â”€ NEW: EXECUTIVE REPORT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── EXECUTIVE REPORT ──────────────────────────────────────────────────────
 function getExecutiveReport(invoiceMap, dateFilter) {
     var range   = getDateRange(dateFilter);
     var execMap = {};
@@ -338,7 +341,7 @@ function getExecutiveReport(invoiceMap, dateFilter) {
     return msg;
 }
 
-// â”€â”€â”€ DATE-WISE INVOICE SUMMARY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── DATE-WISE INVOICE SUMMARY ─────────────────────────────────────────────
 function getDateWiseSummary(invoiceMap, dateFilter) {
     var range = getDateRange(dateFilter);
     var found = [];
@@ -362,7 +365,7 @@ function getDateWiseSummary(invoiceMap, dateFilter) {
     return msg;
 }
 
-// â”€â”€â”€ DEEP BUSINESS SUMMARY (for AI fallback) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── DEEP BUSINESS SUMMARY (for AI fallback) ───────────────────────────────
 function generateDeepBusinessSummary(allRows) {
     var custStats = {}, monthStats = {}, execStats = {};
     for (var i = 0; i < allRows.length; i++) {
@@ -386,7 +389,7 @@ function generateDeepBusinessSummary(allRows) {
     return summary.slice(0, 18000);
 }
 
-// â”€â”€â”€ LOAD ALL DATA â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── LOAD ALL DATA ─────────────────────────────────────────────────────────
 async function loadAllData() {
     if (globalCache && (Date.now() - lastCacheTime < 3600000)) return globalCache;
     var base = process.env.GITHUB_RAW_BASE;
@@ -433,7 +436,7 @@ async function loadAllData() {
     return globalCache;
 }
 
-// â”€â”€â”€ AI REPLY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── AI REPLY ──────────────────────────────────────────────────────────────
 async function getAIReply(userMsg, data, prompt) {
     var key = process.env.NVIDIA_API_KEY; if (!key) return null;
     try {
@@ -446,7 +449,7 @@ async function getAIReply(userMsg, data, prompt) {
     } catch (e) { return null; }
 }
 
-// â”€â”€â”€ SEND â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── SEND ──────────────────────────────────────────────────────────────────
 async function sendText(to, text) {
     var base = (process.env.EVOLUTION_API_URL||'').replace(/\/$/,''); var inst = process.env.EVOLUTION_INSTANCE; var key = process.env.EVOLUTION_API_KEY; var num = to.replace(/@s\.whatsapp\.net$/,'').replace(/@g\.us$/,'');
     if (!base||!inst||!key) return;
@@ -458,7 +461,7 @@ async function sendDocument(to, fileUrl, fileName, caption) {
     try { await axios.post(base+'/message/sendMedia/'+inst,{number:num,mediatype:'document',mimetype:'application/pdf',media:fileUrl,fileName:fileName,caption:caption||''},{headers:{'Content-Type':'application/json','apikey':key}}); } catch(e){}
 }
 
-// â”€â”€â”€ MAIN WEBHOOK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── MAIN WEBHOOK ──────────────────────────────────────────────────────────
 module.exports = async function(req, res) {
     if (req.method !== 'POST') return res.status(200).send('OK');
     try {
@@ -481,7 +484,7 @@ module.exports = async function(req, res) {
         var mrpMap     = dataResult.mrpMap     || {};
         var dlpMap     = dataResult.dlpMap     || {};
 
-        // â”€â”€ PENDING NUMBER SELECTION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── PENDING NUMBER SELECTION ──────────────────────────────────────
         if (/^\d+$/.test(text)) {
             var pending = null;
             if (database) { try { var snap = await database.ref('pending/'+safeFrom).get(); if(snap.exists()) pending = snap.val(); } catch(e){} }
@@ -516,7 +519,7 @@ module.exports = async function(req, res) {
             }
         }
 
-        // â”€â”€ ADMIN COMMANDS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── ADMIN COMMANDS ────────────────────────────────────────────────
         if (isAdmin && text.indexOf('!setprompt ') === 0)  { await saveSystemPrompt(text.slice(11).trim()); await sendText(from, 'Prompt update ho gaya!'); return res.status(200).json({ status: 'ok' }); }
         if (isAdmin && text === '!status')  { await sendText(from, '*Bot Status*\nOnline\nInvoices: '+Object.keys(invoiceMap).length+'\nMRP: '+Object.keys(mrpMap).length+'\nDLP: '+Object.keys(dlpMap).length); return res.status(200).json({ status: 'ok' }); }
         if (isAdmin && text === '!clearcache') { globalCache = null; await sendText(from, 'Cache cleared!'); return res.status(200).json({ status: 'ok' }); }
@@ -530,14 +533,14 @@ module.exports = async function(req, res) {
         if (isAdmin && text.indexOf('!removepdf ') === 0) { var kw = text.slice(11).trim().toLowerCase(); var pl2 = await getPDFList(); if(pl2[kw]){delete pl2[kw]; await savePDFList(pl2); await sendText(from,'Removed: '+kw);} else await sendText(from,'Not found: '+kw); return res.status(200).json({ status: 'ok' }); }
         if (isAdmin && text === '!help') { await sendText(from, '*Admin Commands:*\n!status\n!setprompt [text]\n!clearcache\n!addpdf keyword|Name|URL\n!listpdf\n!removepdf keyword'); return res.status(200).json({ status: 'ok' }); }
 
-        // â”€â”€ GREETING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── GREETING ──────────────────────────────────────────────────────
         var lower = text.toLowerCase();
         if (['hi','hello','namaste','hey','hii','good morning','kaise ho','helo'].some(function(g){return lower===g||lower.startsWith(g+' ');})) {
             await sendText(from, 'Hello! Main Laxmi hoon, Shri Laxmi Auto Store ki assistant.\nInvoice details, MRP/DLP rates, customer reports pooch sakte hain!');
             return res.status(200).json({ status: 'ok' });
         }
 
-        // â”€â”€ PDF SEND REQUEST â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── PDF SEND REQUEST ──────────────────────────────────────────────
         var hasSend = ['send','bhejo','share','bhej','de do','chahiye','pdf'].some(function(w){return lower.includes(w);});
         var hasMRP  = ['mrp','maximum retail'].some(function(w){return lower.includes(w);});
         var hasDLP  = ['list price','dlp','dealer price','price list'].some(function(w){return lower.includes(w);});
@@ -545,7 +548,7 @@ module.exports = async function(req, res) {
         if (hasSend && hasDLP  && dataResult.listPdfUrl) { await sendDocument(from, dataResult.listPdfUrl, dataResult.listPdfFile, dataResult.listPdfFile); return res.status(200).json({status:'ok'}); }
         for (var k in savedPDFs) { if (lower.includes(k) && hasSend) { await sendDocument(from, savedPDFs[k].url, savedPDFs[k].name, savedPDFs[k].name); return res.status(200).json({status:'ok'}); } }
 
-        // â”€â”€ PRODUCT RATE QUERY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── PRODUCT RATE QUERY ────────────────────────────────────────────
         var prodMatches = searchProducts(text, mrpMap, dlpMap);
         var invMatches  = searchInvoices(text, invoiceMap);
         var isRateQ     = ['rate','price','mrp','dlp','kitne ka','dam','rupay'].some(function(w){return lower.includes(w);});
@@ -566,7 +569,7 @@ module.exports = async function(req, res) {
             return res.status(200).json({status:'ok'});
         }
 
-        // â”€â”€ INVOICE SEARCH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── INVOICE SEARCH ────────────────────────────────────────────────
         if (invMatches.length === 1) {
             var m2 = invMatches[0]; var f2 = m2.rows[0];
             var prods2 = m2.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + ');
@@ -585,7 +588,7 @@ module.exports = async function(req, res) {
             return res.status(200).json({status:'ok'});
         }
 
-        // â”€â”€ NEW: SMART CUSTOMER/ANALYTICS QUERIES (No AI needed) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── SMART CUSTOMER/ANALYTICS QUERIES ─────────────────────────────
         var qIntent = detectQueryIntent(text);
         console.log('[INTENT] type:'+qIntent.type+' dateFilter:'+qIntent.dateFilter+' query:'+text);
 
@@ -606,7 +609,7 @@ module.exports = async function(req, res) {
             var cMatches = searchCustomers(text, invoiceMap);
 
             if (cMatches.length === 0) {
-                // Date-only query (today/this week) â€” date-wise summary do
+                // Date-only query (today/this week) — date-wise summary do
                 if (qIntent.dateFilter !== 'all') {
                     var dateSummary = getDateWiseSummary(invoiceMap, qIntent.dateFilter);
                     await sendText(from, dateSummary);
@@ -622,7 +625,7 @@ module.exports = async function(req, res) {
                 return res.status(200).json({status:'ok'});
             }
 
-            // Multiple customer matches
+            // Multiple customer matches → Show numbered selection
             var cMsg = '*Kaunse customer ka data? Number reply karein:*\n\n';
             cMatches.forEach(function(c,i){ cMsg += (i+1)+'. '+c.name+'\n'; });
             var cPend = { type:'customer_select', matches:cMatches, dateFilter:qIntent.dateFilter, ts:Date.now() };
@@ -632,7 +635,7 @@ module.exports = async function(req, res) {
             return res.status(200).json({status:'ok'});
         }
 
-        // â”€â”€ AI FALLBACK (general analytics only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── AI FALLBACK (general analytics only) ─────────────────────────
         var aiReply2 = await getAIReply(
             'User Query: "'+text+'"\nInstructions: Use CONTEXT DATA to answer. If answer not clearly in data, say exactly: "Please wait, admin will reply soon."',
             dataResult.businessSummary || '',
