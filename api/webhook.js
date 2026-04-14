@@ -214,18 +214,32 @@ function loadPriceListFromExcel(wb) {
     return priceMap;
 }
 
-// ─── PRODUCT SEARCH ────────────────────────────────────────────────────────
+// ─── STRICT PRODUCT SEARCH ──────────────────────────────────────────────────
 function searchProducts(query, mrpMap, dlpMap) {
+    if (query.startsWith('!')) return []; // Command ko product nahi manega
     var q = query.toLowerCase().replace(/[^a-z0-9]/g, ' ');
     var stopWords = ['price','rate','mrp','dlp','kya','hai','batao','aur','ka','ke','liye','ye','pucha','list'];
-    var searchTerms = q.split(/\s+/).filter(function(w){ return w.length > 1 && stopWords.indexOf(w) === -1; });
+    
+    // FIX: Only match words that are at least 3 characters long (no 'ai', 'ok', etc.)
+    var searchTerms = q.split(/\s+/).filter(function(w){ return w.length > 2 && stopWords.indexOf(w) === -1; });
     if (searchTerms.length === 0) return [];
+    
     var combined = {};
     for (var mName in mrpMap) { var norm = mName.toLowerCase().replace(/[^a-z0-9]/g, ''); if (!combined[norm]) combined[norm] = { orig: mName, sizes: {} }; for (var sz in mrpMap[mName]) { if (!combined[norm].sizes[sz]) combined[norm].sizes[sz] = {}; combined[norm].sizes[sz].mrp = mrpMap[mName][sz]; } }
     for (var dName in dlpMap) { var normD = dName.toLowerCase().replace(/[^a-z0-9]/g, ''); if (!combined[normD]) combined[normD] = { orig: dName, sizes: {} }; for (var sz in dlpMap[dName]) { if (!combined[normD].sizes[sz]) combined[normD].sizes[sz] = {}; combined[normD].sizes[sz].dlp = dlpMap[dName][sz]; } }
+    
     var products = [];
-    for (var key in combined) { var score = 0; for (var t = 0; t < searchTerms.length; t++) { if (key.indexOf(searchTerms[t]) !== -1) score++; } if (score >= Math.min(2, Math.max(1, searchTerms.length - 1))) { var pData = combined[key]; var chunk = 'Product: ' + pData.orig + '\n'; var hasData = false; for (var sz in pData.sizes) { chunk += '- Size [' + sz + '] : MRP Rs. ' + (pData.sizes[sz].mrp || 'N/A') + ' | DLP Rs. ' + (pData.sizes[sz].dlp || 'N/A') + '\n'; hasData = true; } if (hasData) products.push({ name: pData.orig, score: score, chunk: chunk }); } }
-    products.sort(function(a,b){ return b.score - a.score; }); return products.slice(0, 5);
+    for (var key in combined) { 
+        var score = 0; 
+        for (var t = 0; t < searchTerms.length; t++) { if (key.indexOf(searchTerms[t]) !== -1) score++; } 
+        if (score >= Math.min(2, Math.max(1, searchTerms.length - 1))) { 
+            var pData = combined[key]; var chunk = 'Product: ' + pData.orig + '\n'; var hasData = false; 
+            for (var sz in pData.sizes) { chunk += '- Size [' + sz + '] : MRP Rs. ' + (pData.sizes[sz].mrp || 'N/A') + ' | DLP Rs. ' + (pData.sizes[sz].dlp || 'N/A') + '\n'; hasData = true; } 
+            if (hasData) products.push({ name: pData.orig, score: score, chunk: chunk }); 
+        } 
+    }
+    products.sort(function(a,b){ return b.score - a.score; }); 
+    return products.slice(0, 5);
 }
 
 function searchInvoices(query, invoiceMap) {
@@ -342,7 +356,6 @@ function getTopProducts(allRows, dateRange, limit) {
     return msg.trim();
 }
 
-// ✅ SE WISE REPORT WITH GRAND TOTAL
 function getExecutiveReport(invoiceMap, dateRange) {
     var execMap = {}; 
     var grandVol = 0, grandVal = 0, grandCount = 0;
@@ -373,7 +386,6 @@ function getExecutiveReport(invoiceMap, dateRange) {
     var msg = '*Sales Executive-wise Volume*\n';
     if (dateRange && dateRange.label) msg += '*Period:* ' + dateRange.label + '\n';
     msg += '\n';
-    
     keys.sort(function(a,b){return execMap[b].vol - execMap[a].vol;}).forEach(function(exec){ 
         var s = execMap[exec]; 
         msg += '*' + exec + '*\n   Vol: ' + s.vol.toFixed(1) + 'L | Val: Rs.' + s.val.toFixed(0) + ' | Bills: ' + s.count + '\n\n'; 
@@ -382,7 +394,6 @@ function getExecutiveReport(invoiceMap, dateRange) {
     msg += '----------------------\n';
     msg += '*📌 Grand Total*\n';
     msg += 'Vol: ' + grandVol.toFixed(1) + 'L | Val: Rs.' + grandVal.toFixed(0) + ' | Bills: ' + grandCount;
-    
     return msg.trim();
 }
 
@@ -508,12 +519,12 @@ module.exports = async function(req, res) {
         var text = ((body.data.message&&body.data.message.conversation)||(body.data.message&&body.data.message.extendedTextMessage&&body.data.message.extendedTextMessage.text)||'').trim();
         if (!text||!from) return res.status(200).send('Empty');
 
-        var envAdmin = process.env.ADMIN_NUMBER || '919950858818';
+        // ✅ FIXED DEFAULT ADMIN NUMBER
+        var adminNum = process.env.ADMIN_NUMBER || '919468940057';
         var pureNumber = from.split('@')[0];
         var safeFrom = sanitizePath(from);
         var database = getFirebase();
 
-        // Load all configs and data at once
         var results = await Promise.all([getSystemPrompt(), loadAllData(), getPDFList(), isWhitelistActive(), getAllowedNumbers(), getBotSettings(), getAdmins()]);
         var sysPrompt = results[0]; var dataResult = results[1]||{}; var savedPDFs = results[2];
         var wlActive = results[3]; var allowedNums = results[4]; var settings = results[5]; var adminDict = results[6];
@@ -521,11 +532,10 @@ module.exports = async function(req, res) {
         var invoiceMap = dataResult.invoiceMap || {}; var mrpMap = dataResult.mrpMap || {}; var dlpMap = dataResult.dlpMap || {}; var allRows = dataResult.allRows || [];
 
         // Check if user is Admin
-        var isAdmin = (pureNumber === envAdmin) || adminDict[pureNumber];
+        var isAdmin = (pureNumber === adminNum) || adminDict[pureNumber];
 
         // ── 🚨 GLOBAL BOT TOGGLE 🚨 ──
         if (!settings.botEnabled && !isAdmin) {
-            // If bot is turned off, ignore everyone except Admins.
             return res.status(200).send('Bot is OFF');
         }
 
@@ -535,50 +545,7 @@ module.exports = async function(req, res) {
             return res.status(200).send('Blocked by Whitelist'); 
         }
 
-        // ── PENDING SELECTION (Options Menu) ──────────────────────────────────
-        if (/^\d+$/.test(text)) {
-            var pending = null;
-            try { var snap = await database.ref('pending/' + safeFrom).get(); if(snap.exists()) pending = snap.val(); } catch(e){}
-            if (!pending && memoryPending[safeFrom]) pending = memoryPending[safeFrom];
-            
-            if (pending && pending.matches) {
-                var idx = parseInt(text) - 1;
-                if (idx >= 0 && idx < pending.matches.length) {
-                    if (pending.type === 'invoice') { var m = pending.matches[idx]; var f = m.rows[0]; var prods = m.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG = m.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl = m.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m.invNo+'\n*Customer:* '+f['Customer Name']+'\n*Products:* '+prods+'\n*Total Value:* Rs.'+tG.toFixed(2)+'\n*Total Volume:* '+vl.toFixed(1)+' L\n*Date:* '+cleanDate(f['Invoice Date'])+'\n*Payment:* '+f['Mode Of Payement']); } 
-                    else if (pending.type === 'product') { 
-                        var p = pending.matches[idx]; 
-                        var aiPrompt = 'User Query: "'+pending.originalQuery+'"\nSelected: '+p.name+'\n\nRULES:\n1. Match EXACT size requested (1ltr=1L).\n2. CRITICAL: DO NOT divide or calculate prices. Just extract from data.\n3. If size not listed, say EXACTLY: "Bhai, is product ka ye size price list mein nahi hai."';
-                        var aiR = await getAIReply(aiPrompt, '[PRICE DATA]\n'+p.chunk, sysPrompt); 
-                        await sendText(from, aiR || 'Data nahi mila.'); 
-                    }
-                    else if (pending.type === 'customer_report') { var cReport = getCustomerReport(pending.matches[idx].name, invoiceMap, pending.dateRange, pending.lastOnly); await sendText(from, cReport); }
-                    
-                    try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
-                    delete memoryPending[safeFrom];
-                    return res.status(200).json({ status: 'ok' });
-                } else {
-                    // Out of bounds -> clear pending and let it run as direct invoice number search below
-                    try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
-                    delete memoryPending[safeFrom];
-                }
-            }
-        }
-
         var lower = text.toLowerCase();
-
-        // ── 🌍 THE PUBLIC `!ASK` COMMAND (WITH TOGGLE) ─────────────────────
-        if (lower.indexOf('!ask ') === 0) { 
-            if (!settings.aiEnabled && !isAdmin) {
-                await sendText(from, "❌ Bhai, AI features abhi admin dvara disable kiye gaye hain.");
-                return res.status(200).json({ status: 'ok' });
-            }
-            var aiQuery = text.slice(5).trim();
-            var publicAiPrompt = 'You are Krish, a helpful assistant. Answer the user query using the CONTEXT DATA if related to business, otherwise answer from general knowledge. If you do not know, say "Bhai, iska jawab mujhe nahi pata." NO EMOJIS.';
-            var bizSummaryAI = generateDeepBusinessSummary(allRows);
-            var aiReplyText = await getAIReply(aiQuery, bizSummaryAI, publicAiPrompt);
-            await sendText(from, aiReplyText || "Bhai, iska jawab mujhe nahi pata."); 
-            return res.status(200).json({ status: 'ok' }); 
-        }
 
         // ── 👑 ALL ADMIN MASTER COMMANDS ──────────────────────────────────
         if (isAdmin) {
@@ -611,6 +578,58 @@ module.exports = async function(req, res) {
                            "💬 *Ask AI:*\n!ask <question>";
                 await sendText(from, cMsg); 
                 return res.status(200).json({ status: 'ok' });
+            }
+            
+            // ✅ ADMIN AI COMMAND (Supports both !ask and !ai)
+            if (lower.startsWith('!ask ') || lower.startsWith('!ai ')) {
+                var aiQuery = lower.startsWith('!ask ') ? text.slice(5).trim() : text.slice(4).trim();
+                var adminAiPrompt = 'You are a helpful AI assistant for the admin. Answer the general knowledge or analytical query. If it is about the business, use the CONTEXT DATA. If it is a general world question, use your own knowledge. If you do not know, say "Bhai, iska jawab mujhe nahi pata." NO EMOJIS.';
+                var bizSummaryAdmin = generateDeepBusinessSummary(allRows);
+                var aiReplyAdmin = await getAIReply(aiQuery, bizSummaryAdmin, adminAiPrompt);
+                await sendText(from, aiReplyAdmin || "Bhai, iska jawab mujhe nahi pata."); 
+                return res.status(200).json({ status: 'ok' }); 
+            }
+        } else {
+            // Check Public !ask command
+            if (lower.startsWith('!ask ')) {
+                if (!settings.aiEnabled) {
+                    await sendText(from, "❌ Bhai, AI features abhi admin dvara disable kiye gaye hain.");
+                    return res.status(200).json({ status: 'ok' });
+                }
+                var publicAiQuery = text.slice(5).trim();
+                var publicAiPrompt = 'You are Krish, a helpful assistant. Answer the user query using the CONTEXT DATA if related to business, otherwise answer from general knowledge. If you do not know, say "Bhai, iska jawab mujhe nahi pata." NO EMOJIS.';
+                var bizSummaryAI = generateDeepBusinessSummary(allRows);
+                var aiReplyText = await getAIReply(publicAiQuery, bizSummaryAI, publicAiPrompt);
+                await sendText(from, aiReplyText || "Bhai, iska jawab mujhe nahi pata."); 
+                return res.status(200).json({ status: 'ok' });
+            }
+        }
+
+        // ── PENDING SELECTION (Options Menu) ──────────────────────────────────
+        if (/^\d+$/.test(text)) {
+            var pending = null;
+            try { var snap = await database.ref('pending/' + safeFrom).get(); if(snap.exists()) pending = snap.val(); } catch(e){}
+            if (!pending && memoryPending[safeFrom]) pending = memoryPending[safeFrom];
+            
+            if (pending && pending.matches) {
+                var idx = parseInt(text) - 1;
+                if (idx >= 0 && idx < pending.matches.length) {
+                    if (pending.type === 'invoice') { var m = pending.matches[idx]; var f = m.rows[0]; var prods = m.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG = m.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl = m.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m.invNo+'\n*Customer:* '+f['Customer Name']+'\n*Products:* '+prods+'\n*Total Value:* Rs.'+tG.toFixed(2)+'\n*Total Volume:* '+vl.toFixed(1)+' L\n*Date:* '+cleanDate(f['Invoice Date'])+'\n*Payment:* '+f['Mode Of Payement']); } 
+                    else if (pending.type === 'product') { 
+                        var p = pending.matches[idx]; 
+                        var aiPrompt = 'User Query: "'+pending.originalQuery+'"\nSelected: '+p.name+'\n\nRULES:\n1. Match EXACT size requested (1ltr=1L).\n2. CRITICAL: DO NOT divide or calculate prices. Just extract from data.\n3. If size not listed, say EXACTLY: "Bhai, is product ka ye size price list mein nahi hai."';
+                        var aiR = await getAIReply(aiPrompt, '[PRICE DATA]\n'+p.chunk, sysPrompt); 
+                        await sendText(from, aiR || 'Data nahi mila.'); 
+                    }
+                    else if (pending.type === 'customer_report') { var cReport = getCustomerReport(pending.matches[idx].name, invoiceMap, pending.dateRange, pending.lastOnly); await sendText(from, cReport); }
+                    
+                    try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
+                    delete memoryPending[safeFrom];
+                    return res.status(200).json({ status: 'ok' });
+                } else {
+                    try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
+                    delete memoryPending[safeFrom];
+                }
             }
         }
 
@@ -686,7 +705,7 @@ module.exports = async function(req, res) {
         if (invMatches.length === 1) { var m2 = invMatches[0]; var f2 = m2.rows[0]; var prods2 = m2.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m2.invNo+'\n*Customer:* '+f2['Customer Name']+'\n*Products:* '+prods2+'\n*Total Value:* Rs.'+tG2.toFixed(2)+'\n*Total Volume:* '+vl2.toFixed(1)+' L\n*Date:* '+cleanDate(f2['Invoice Date'])+'\n*Payment:* '+f2['Mode Of Payement']); return res.status(200).json({status:'ok'}); }
         if (invMatches.length > 1) { var msg2 = '*Multiple invoices. Number reply karein:*\n\n'; invMatches.forEach(function(m,i){ msg2 += (i+1)+'. '+m.customer+' ('+m.invNo+')\n'; }); var pend2 = { type:'invoice', matches:invMatches, ts:Date.now() }; try { await database.ref('pending/'+safeFrom).set(pend2); } catch(e){} memoryPending[safeFrom] = pend2; await sendText(from, msg2); return res.status(200).json({status:'ok'}); }
 
-        // ── 3. SPECIFIC CUSTOMER SEARCH ───────────────────
+        // ── 3. SPECIFIC CUSTOMER SEARCH (FAST MATCH) ───────────────────
         var cMatches = searchCustomers(text, invoiceMap);
         var isCustQuery = ['bill', 'invoice', 'khata', 'hisab', 'data', 'report', 'ka', 'ki', 'batao'].some(function(w){return lower.includes(w);});
         
@@ -711,7 +730,7 @@ module.exports = async function(req, res) {
             var isCustomAnalytics = ['sabse', 'kam', 'lowest', 'low', 'aaj', 'kal', 'din', 'bika', 'invoice', 'bill', 'hisab'].some(function(w){return lower.includes(w);});
 
             if (isCustomAnalytics) {
-                var aiPrompt = 'You are a Data Analyst. Answer the user query using ONLY the [FULL BUSINESS LEDGER] below.\n\nRULES:\n1. Answer clearly based ONLY on the provided data.\n2. Write in plain Hinglish. NO EMOJIS.\n3. Add EXACTLY this line at the end of your answer: "\n*(Note: Data may incorrect please reverify)*"\n4. If data is not found, output EXACTLY: "Please wait, admin will reply soon."';
+                var aiPrompt = 'You are a Data Analyst. Answer the user query using ONLY the [FULL BUSINESS LEDGER] below.\n\nRULES:\n1. Answer clearly based ONLY on the provided data.\n2. Write in plain Hinglish. NO EMOJIS.\n3. Add EXACTLY this line at the end of your response: "\n*(Note: Data may incorrect please reverify)*"\n4. If data is not found, output EXACTLY: "Please wait, admin will reply soon."';
                 var bizSummary = generateDeepBusinessSummary(allRows);
                 var aiReply = await getAIReply(text, bizSummary, aiPrompt);
                 
