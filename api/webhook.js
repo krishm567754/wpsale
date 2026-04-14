@@ -194,7 +194,75 @@ function searchInvoices(query, invoiceMap) {
   return matches.slice(0, 5);
 }
 
-// ✅ MEGA-LEDGER: Computes detailed stats for AI to answer specific/custom questions instantly
+// ✅ NAYA FUNCTION: Customer ka naam dhoondhne ke liye (For JSON Router)
+function searchCustomers(query, invoiceMap) {
+  var q = query.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+  var stopWords = ['ka','ki','ke','ko','batao','dikhao','data','report','invoice','bill','total','volume','hisab','wale','wali'];
+  var words = q.split(/\s+/).filter(function(w){ return w.length > 2 && stopWords.indexOf(w) === -1; });
+  if (words.length === 0) words = [q];
+
+  var custSet = {};
+  for (var inv in invoiceMap) {
+    var cName = invoiceMap[inv][0]['Customer Name'];
+    if (cName) custSet[cName] = true;
+  }
+
+  var matches = [];
+  for (var cName in custSet) {
+    var cLower = cName.toLowerCase().replace(/[^a-z0-9 ]/g, '');
+    var score = 0;
+    for (var w = 0; w < words.length; w++) {
+      if (cLower.indexOf(words[w]) !== -1) score++;
+    }
+    if (score > 0) matches.push({ name: cName, score: score });
+  }
+  matches.sort(function(a,b){ return b.score - a.score; });
+  return matches.slice(0, 5);
+}
+
+// ✅ NAYA FUNCTION: Specific Customer ke saare invoices aur total filter karne ke liye
+function getCustomerReport(custName, invoiceMap) {
+    var rows = [];
+    for (var inv in invoiceMap) {
+        if (invoiceMap[inv][0]['Customer Name'] === custName) {
+            rows.push({inv: inv, data: invoiceMap[inv]});
+        }
+    }
+    if(rows.length === 0) return "Data me nahi mila.";
+
+    rows.sort(function(a,b) {
+       var dtA = typeof a.data[0]['Invoice Date'] === 'number' ? a.data[0]['Invoice Date'] : Date.parse(a.data[0]['Invoice Date']);
+       var dtB = typeof b.data[0]['Invoice Date'] === 'number' ? b.data[0]['Invoice Date'] : Date.parse(b.data[0]['Invoice Date']);
+       return dtB - dtA; // Latest pehle
+    });
+
+    var totalVol = 0;
+    var totalVal = 0;
+    var msg = "*Customer Report: " + custName + "*\n\n";
+
+    var limit = Math.min(rows.length, 10); // Start me sirf 10 bills dikhayenge
+
+    for(var i=0; i<rows.length; i++) {
+        var m = rows[i].data;
+        var f = m[0];
+        var v = m.reduce(function(s, r){ return s + (parseFloat(r['Product Volume'])||0); }, 0);
+        var val = m.reduce(function(s, r){ return s + (parseFloat(r['Total Value incl VAT/GST'])||0); }, 0);
+        totalVol += v;
+        totalVal += val;
+
+        if (i < limit) {
+            msg += "Inv: " + rows[i].inv + " | Date: " + cleanDate(f['Invoice Date']) + "\nVol: " + v.toFixed(1) + "L | Val: Rs." + val.toFixed(2) + "\n\n";
+        }
+    }
+
+    if (rows.length > limit) {
+        msg += "...aur " + (rows.length - limit) + " purane bills hain.\n\n";
+    }
+
+    msg += "*Total Volume:* " + totalVol.toFixed(1) + " L\n*Total Value:* Rs. " + totalVal.toFixed(2);
+    return msg;
+}
+
 function generateDeepBusinessSummary(allRows) {
     var custStats = {};
     var monthStats = {};
@@ -230,7 +298,6 @@ function generateDeepBusinessSummary(allRows) {
     for(var m in monthStats) { summary += "[" + m + "] Vol:" + monthStats[m].vol.toFixed(1) + "L, Val:Rs." + monthStats[m].val.toFixed(0) + "\n"; }
     
     summary += "\n-- ALL CUSTOMERS (Vol & Val) --\n";
-    // Sorted by volume to keep the most important ones at the top
     var sortedCusts = Object.keys(custStats).sort(function(a,b){return custStats[b].vol - custStats[a].vol;});
     for(var c=0; c<sortedCusts.length; c++) { 
       var k = sortedCusts[c];
@@ -240,7 +307,6 @@ function generateDeepBusinessSummary(allRows) {
     summary += "\n-- SALES EXECUTIVES --\n";
     for(var e in execStats) { summary += "[EXEC] " + e + " -> Vol:" + execStats[e].vol.toFixed(1) + "L, Val:Rs." + execStats[e].val.toFixed(0) + "\n"; }
 
-    // Slice to prevent token limit exceed (approx last 15000 chars is safe)
     return summary.slice(0, 18000);
 }
 
@@ -273,7 +339,6 @@ async function loadAllData() {
     if(inv){ if(!invoiceMap[inv]) invoiceMap[inv] = []; invoiceMap[inv].push(allRows[m]); } 
   }
   
-  // Creates the mega-ledger for AI
   var bizSummary = generateDeepBusinessSummary(allRows);
 
   var mrpFile = fileList.find(function(f){ return f.toLowerCase().includes('mrp') && f.match(/\.(xlsx|xls)$/i); });
@@ -306,6 +371,23 @@ async function loadAllData() {
   };
   lastCacheTime = Date.now();
   return globalCache;
+}
+
+// ✅ NAYA AI ROUTER (Sirf 0.5 sec lega Intent samajhne me)
+async function getAIIntent(userMsg) {
+  var key = process.env.NVIDIA_API_KEY; if (!key) return null;
+  try {
+    var prompt = 'You are a JSON router. Read the user query: "' + userMsg + '".\nIf the user is asking for data/bills/history of a SPECIFIC customer by name (e.g. "Raju ka bill batao"), output ONLY valid JSON: {"action": "customer", "name": "Extract Name"}.\nOtherwise, output ONLY JSON: {"action": "general"}.\nNo markdown, just raw JSON.';
+    var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', {
+      model: 'meta/llama-3.1-70b-instruct',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 50, temperature: 0.0
+    }, { headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' }, timeout: 10000 });
+    
+    var raw = res.data.choices[0].message.content;
+    var jsonStr = raw.substring(raw.indexOf('{'), raw.lastIndexOf('}') + 1);
+    return JSON.parse(jsonStr);
+  } catch (e) { return null; }
 }
 
 async function getAIReply(userMsg, data, prompt) {
@@ -349,10 +431,12 @@ module.exports = async function(req, res) {
     var results = await Promise.all([getSystemPrompt(), loadAllData(), getPDFList()]);
     var sysPrompt = results[0]; var dataResult = results[1] || {}; var savedPDFs = results[2];
 
+    // ✅ Option Selection Handlers (For 1, 2, 3...)
     if (/^\d+$/.test(text)) {
       var pending = null;
       if (database) { try { var snap = await database.ref('pending/' + safeFrom).get(); if (snap.exists()) pending = snap.val(); } catch (e) {} }
       if (!pending && memoryPending[safeFrom]) pending = memoryPending[safeFrom];
+      
       if (pending && pending.matches) {
         var idx = parseInt(text) - 1;
         if (pending.matches[idx]) {
@@ -362,13 +446,21 @@ module.exports = async function(req, res) {
             var tG = m.rows.reduce(function(s, r){ return s + (parseFloat(r['Total Value incl VAT/GST']) || 0); }, 0);
             var vl = m.rows.reduce(function(s, r){ return s + (parseFloat(r['Product Volume']) || 0); }, 0);
             await sendText(from, '*Invoice:* ' + m.invNo + '\n*Customer:* ' + f['Customer Name'] + '\n*Products:* ' + prods + '\n*Total Value:* Rs.' + tG.toFixed(2) + '\n*Total Volume:* ' + vl.toFixed(1) + ' L\n*Date:* ' + cleanDate(f['Invoice Date']) + '\n*Payment:* ' + f['Mode Of Payement']);
+          
           } else if (pending.type === 'product') {
             var p = pending.matches[idx];
             var context = '[PRICE DATA]\n' + p.chunk;
-            var aiPrompt = 'User\'s ORIGINAL query was: "' + pending.originalQuery + '". \nNow User selected Product: ' + p.name + '. \nBelow is the exact price list for this product. Provide exact MRP and DLP ONLY for the SPECIFIC SIZE the user originally asked for. Note: 0.9L = 900ml.';
+            var aiPrompt = 'User\'s ORIGINAL query was: "' + pending.originalQuery + '". \nNow User selected Product: ' + p.name + '. \nProvide exact MRP and DLP ONLY for the SPECIFIC SIZE they asked for. Note: 0.9L = 900ml.';
             var aiReply = await getAIReply(aiPrompt, context, sysPrompt);
             await sendText(from, aiReply);
+            
+          // ✅ NAYA OPTION HANDLER: Custom Customer Report
+          } else if (pending.type === 'customer_report') {
+            var cMatch = pending.matches[idx];
+            var report = getCustomerReport(cMatch.name, dataResult.invoiceMap);
+            await sendText(from, report);
           }
+
           if (database) await database.ref('pending/' + safeFrom).remove();
           delete memoryPending[safeFrom];
           return res.status(200).json({ status: 'ok' });
@@ -384,19 +476,19 @@ module.exports = async function(req, res) {
 
     var lower = text.toLowerCase();
     if (['hi','hello','namaste','hey','hii','good morning','kaise ho'].some(function(g){return lower.indexOf(g)!==-1;})) {
-      await sendText(from, 'Hello! Main Krish hoon, Shri Laxmi Auto Store ki assistant. Invoice details, MRP/DLP rates, ya koi bhi query pooch sakte hain!');
+      await sendText(from, 'Hello! Main Krish hoon, Shri Laxmi Auto Store ki assistant. Invoice details, MRP/DLP rates, ya customer ki sales history pooch sakte hain!');
       return res.status(200).json({ status: 'ok' });
     }
 
     var prodMatches = searchProducts(text, dataResult.mrpMap, dataResult.dlpMap);
     var invMatches = searchInvoices(text, dataResult.invoiceMap);
-    var isRateQuery = ['rate','kya hai','kitna','price','mrp','dlp','kitne ka','dam','rupay','batao'].some(function(w){return lower.indexOf(w)!==-1;});
+    var isRateQuery = ['rate','price','mrp','dlp','kitne ka','dam','rupay'].some(function(w){return lower.indexOf(w)!==-1;});
 
     if (isRateQuery || (prodMatches.length > 0 && invMatches.length === 0)) {
       if (prodMatches.length === 1) {
         var p = prodMatches[0];
         var context = '[PRICE DATA]\n' + p.chunk;
-        var aiReply = await getAIReply('User Query: ' + text + '\nGive exact MRP and DLP ONLY for the size explicitly mentioned in the query. Note: 0.9L is exactly equal to 900ml.', context, sysPrompt);
+        var aiReply = await getAIReply('User Query: ' + text + '\nGive exact MRP and DLP ONLY for the size explicitly mentioned in the query.', context, sysPrompt);
         await sendText(from, aiReply);
         return res.status(200).json({ status: 'ok' });
       } else if (prodMatches.length > 1) {
@@ -425,14 +517,40 @@ module.exports = async function(req, res) {
       return res.status(200).json({ status: 'ok' });
     }
 
-    // ✅ SUPER-SMART NLP ENGINE FOR ANY OTHER QUESTION
-    // Keyword based routing + length fallback
-    var isAnalytics = ['top', 'highest', 'total', 'month', 'volume', 'sales', 'executive', 'report', 'summary', 'sabse', 'zyada', 'kam', 'hisab', 'bika', 'kaun', 'kisne', 'kiska', 'din', 'hafts', 'week', 'mahine', 'saal', 'aaj', 'kal', 'kitna', 'customer', 'kya'].some(function(w){return lower.indexOf(w)!==-1;});
+    // ✅ NAYA: AI INTENT ROUTER (Customer Analytics ya General Query)
+    var isAnalytics = ['top', 'highest', 'total', 'month', 'volume', 'sales', 'executive', 'report', 'summary', 'sabse', 'zyada', 'kam', 'hisab', 'bika', 'kaun', 'kisne', 'kiska', 'din', 'hafts', 'week', 'mahine', 'saal', 'aaj', 'kal', 'kitna', 'customer', 'kya', 'bill', 'invoices', 'khata'].some(function(w){return lower.indexOf(w)!==-1;});
 
     if (isAnalytics || lower.length > 5) {
-      // AI instructions to act as a data analyst with a safe fallback
-      var customPrompt = 'User Query: "' + text + '"\n\nInstructions:\n1. You are a Data Analyst. The user might ask questions in Hindi, Hinglish, English, or local slang.\n2. Look at the [DEEP DATA LEDGER FOR AI] below which contains exact pre-calculated volumes and values for all customers and months.\n3. If the user asks about a specific customer (e.g., "Ramesh ka volume batao"), find that customer in the ledger and report their stats accurately.\n4. If the user asks for a time period (e.g., "April ka sales"), find it in the monthly totals.\n5. If the data is NOT in the ledger, or if the question is completely unrelated to business, YOU MUST REPLY EXACTLY WITH: "Please wait, admin will reply soon." DO NOT guess or invent numbers.\n6. Format your answer nicely in plain Hinglish text. NO EMOJIS. Use "Rs." for currency.';
       
+      // AI se pucho user kya chahta hai
+      var intent = await getAIIntent(text);
+      
+      // Agar AI ne Customer dhundhne ko bola
+      if (intent && intent.action === 'customer' && intent.name) {
+        var cMatches = searchCustomers(intent.name, dataResult.invoiceMap);
+        
+        if (cMatches.length === 1) {
+          // Exact ek customer mil gaya, direct report bhej do
+          var cReport = getCustomerReport(cMatches[0].name, dataResult.invoiceMap);
+          await sendText(from, cReport);
+          return res.status(200).json({ status: 'ok' });
+          
+        } else if (cMatches.length > 1) {
+          // Ek se zyada customer is naam ke (eg. "Raju"), Options do
+          var msg = '*Kaunse customer ka data dekhna hai? Number reply karein:*\n\n';
+          for (var i = 0; i < cMatches.length; i++) { msg += (i + 1) + '. ' + cMatches[i].name + '\n'; }
+          
+          if (database) { try { await database.ref('pending/' + safeFrom).set({ type: 'customer_report', matches: cMatches, ts: Date.now() }); } catch (e) {} }
+          memoryPending[safeFrom] = { type: 'customer_report', matches: cMatches, ts: Date.now() };
+          await sendText(from, msg);
+          return res.status(200).json({ status: 'ok' });
+          
+        }
+        // Agar customer nahi mila, toh general analytics mein fallback hoga
+      }
+
+      // Agar JSON router general bola, ya customer naam match nahi hua
+      var customPrompt = 'User Query: "' + text + '"\n\nInstructions:\n1. Look at the [DEEP DATA LEDGER FOR AI] below which contains exact pre-calculated volumes and values.\n2. If the user asks for a time period (e.g., "April ka sales"), find it in the monthly totals.\n3. If the data is NOT in the ledger, or if the question is completely unrelated to business, YOU MUST REPLY EXACTLY WITH: "Please wait, admin will reply soon." DO NOT guess or invent numbers.\n4. Format your answer nicely in plain Hinglish text. NO EMOJIS. Use "Rs." for currency.';
       var customReply = await getAIReply(customPrompt, dataResult.businessSummary, sysPrompt);
       
       if (!customReply || customReply.indexOf('Error') !== -1 || customReply.toLowerCase().indexOf('admin will reply soon') !== -1) {
@@ -443,7 +561,7 @@ module.exports = async function(req, res) {
       return res.status(200).json({ status: 'ok' });
     }
 
-    // Fallback for random gibberish
+    // Default Fallback
     await sendText(from, 'Please wait, admin will reply soon.');
     return res.status(200).json({ status: 'ok' });
   } catch (e) {
