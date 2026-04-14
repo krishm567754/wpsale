@@ -58,7 +58,7 @@ function cleanDate(val) {
     return String(dt.getDate()).padStart(2,'0') + '/' + String(dt.getMonth()+1).padStart(2,'0') + '/' + dt.getFullYear();
 }
 
-// ─── ROBUST DATE EXTRACTOR ───────────────────────────────────
+// ─── ROBUST DATE EXTRACTOR (With Year Support) ──────────────────────────────
 function extractDateRange(text) {
     var lower = text.toLowerCase();
     var now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
@@ -69,6 +69,9 @@ function extractDateRange(text) {
     var monthNames = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
     var monthFull = ['january','february','march','april','may','june','july','august','september','october','november','december'];
     
+    var yearMatch = lower.match(/\b(202\d)\b/);
+    var targetYear = yearMatch ? parseInt(yearMatch[1]) : null;
+
     var targetMonth = -1;
     for(var i=0; i<12; i++){
         if(lower.match(new RegExp("\\b" + monthFull[i] + "\\b")) || lower.match(new RegExp("\\b" + monthNames[i] + "\\b"))) {
@@ -76,12 +79,17 @@ function extractDateRange(text) {
         }
     }
 
+    if (targetYear === null) {
+        targetYear = (targetMonth > cm) ? cy - 1 : cy; // Adjust for previous year if month has passed
+        if (targetMonth === -1) targetYear = cy;
+    }
+
     var rangeMatch = lower.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s*(?:to|-|se)\s*(\d{1,2})\s*(?:st|nd|rd|th)?/);
     if (rangeMatch && targetMonth !== -1) {
-        return { from: toTS(cy, targetMonth, parseInt(rangeMatch[1])), to: toTS(cy, targetMonth, parseInt(rangeMatch[2]), 23, 59, 59), label: rangeMatch[1] + ' to ' + rangeMatch[2] + ' ' + monthFull[targetMonth].toUpperCase(), exactMonth: targetMonth };
+        return { from: toTS(targetYear, targetMonth, parseInt(rangeMatch[1])), to: toTS(targetYear, targetMonth, parseInt(rangeMatch[2]), 23, 59, 59), label: rangeMatch[1] + ' to ' + rangeMatch[2] + ' ' + monthFull[targetMonth].toUpperCase() + ' ' + targetYear };
     }
     if (rangeMatch && targetMonth === -1) {
-        return { from: toTS(cy, cm, parseInt(rangeMatch[1])), to: toTS(cy, cm, parseInt(rangeMatch[2]), 23, 59, 59), label: rangeMatch[1] + ' to ' + rangeMatch[2] + ' ' + monthFull[cm].toUpperCase() };
+        return { from: toTS(cy, cm, parseInt(rangeMatch[1])), to: toTS(cy, cm, parseInt(rangeMatch[2]), 23, 59, 59), label: rangeMatch[1] + ' to ' + rangeMatch[2] + ' ' + monthFull[cm].toUpperCase() + ' ' + cy };
     }
 
     var singleDateMatch = lower.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*/);
@@ -90,17 +98,18 @@ function extractDateRange(text) {
         var mStr = singleDateMatch[2];
         var tm = monthNames.indexOf(mStr);
         if (tm !== -1) {
-            return { from: toTS(cy, tm, day, 0, 0, 0), to: toTS(cy, tm, day, 23, 59, 59), label: day + ' ' + monthFull[tm].toUpperCase(), exactMonth: tm };
+            var y = yearMatch ? targetYear : (tm > cm ? cy - 1 : cy);
+            return { from: toTS(y, tm, day, 0, 0, 0), to: toTS(y, tm, day, 23, 59, 59), label: day + ' ' + monthFull[tm].toUpperCase() + ' ' + y };
         }
     }
 
     if (lower.includes('1st week') || lower.includes('first week') || lower.includes('pehla hafta') || lower.includes('week 1')) {
         var tm = targetMonth !== -1 ? targetMonth : cm;
-        return { from: toTS(cy, tm, 1), to: toTS(cy, tm, 7, 23, 59, 59), label: '1st Week of ' + monthFull[tm].toUpperCase(), exactMonth: tm };
+        return { from: toTS(targetYear, tm, 1), to: toTS(targetYear, tm, 7, 23, 59, 59), label: '1st Week of ' + monthFull[tm].toUpperCase() + ' ' + targetYear };
     }
 
     if (targetMonth !== -1) {
-        return { from: toTS(cy, targetMonth, 1), to: toTS(cy, targetMonth + 1, 0, 23, 59, 59), label: monthFull[targetMonth].toUpperCase(), exactMonth: targetMonth };
+        return { from: toTS(targetYear, targetMonth, 1), to: toTS(targetYear, targetMonth + 1, 0, 23, 59, 59), label: monthFull[targetMonth].toUpperCase() + ' ' + targetYear };
     }
     
     if (lower.match(/\btoday\b|\baaj\b/)) return { from: toTS(cy, cm, cd), to: toTS(cy, cm, cd, 23, 59, 59), label: 'Today' };
@@ -117,7 +126,9 @@ function extractDateRange(text) {
         return { from: toTS(cy, cm, 1), to: toTS(cy, cm + 1, 0, 23, 59, 59), label: 'This Month' };
     }
     if (lower.match(/\blast\s*month\b|\bpichla\s*mahine\b|\bprevious\s*month\b/)) {
-        return { from: toTS(cy, cm - 1, 1), to: toTS(cy, cm, 0, 23, 59, 59), label: 'Last Month' };
+        var lm = cm === 0 ? 11 : cm - 1;
+        var ly = cm === 0 ? cy - 1 : cy;
+        return { from: toTS(ly, lm, 1), to: toTS(ly, lm + 1, 0, 23, 59, 59), label: 'Last Month' };
     }
     return null;
 }
@@ -141,10 +152,7 @@ function parseDataQuery(text) {
 function isDateInRange(ts, dateRange) {
     if (!dateRange) return true; 
     if (ts <= 0) return false; 
-    if (dateRange.exactMonth !== undefined) {
-        var d = new Date(ts);
-        if (d.getMonth() === dateRange.exactMonth) return true;
-    }
+    // Strict Timestamp logic prevents overlap bugs
     return (ts >= dateRange.from && ts <= dateRange.to);
 }
 
@@ -366,6 +374,7 @@ function getCustomerReport(custName, invoiceMap, dateRange, lastOnly) {
     return msg;
 }
 
+// ✅ FULL UNRESTRICTED LEDGER ACCESS FOR AI FALLBACK
 function generateDeepBusinessSummary(allRows) {
     var custStats = {}; var monthStats = {}; var execStats = {}; var prodStats = {};
     for (var i=0; i<allRows.length; i++) {
@@ -398,7 +407,7 @@ function generateDeepBusinessSummary(allRows) {
     summary += "\n-- ALL SALES EXECUTIVES --\n";
     for(var e in execStats) { summary += "[EXEC] " + e + " -> Vol:" + execStats[e].vol.toFixed(1) + "L, Val:Rs." + execStats[e].val.toFixed(0) + "\n"; }
 
-    return summary.slice(0, 100000); 
+    return summary.slice(0, 25000); 
 }
 
 // ─── LOAD ALL DATA ─────────────────────────────────────────────────────────
@@ -414,13 +423,13 @@ async function loadAllData() {
     var mrpPdfFile  = fileList.find(function(f){ return f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); }); var listPdfFile = fileList.find(function(f){ return (f.toLowerCase().includes('list')||f.toLowerCase().includes('dlp')) && !f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); });
     var mrpPdfUrl   = mrpPdfFile  ? base+'/'+encodeURIComponent(mrpPdfFile)  : ''; var listPdfUrl  = listPdfFile ? base+'/'+encodeURIComponent(listPdfFile) : '';
     globalCache = { invoiceMap: invoiceMap, allRows: allRows, mrpMap: mrpMap, dlpMap: dlpMap, mrpFile: mrpFile, dlpFile: dlpFile, mrpPdfUrl: mrpPdfUrl, listPdfUrl: listPdfUrl, mrpPdfFile: mrpPdfFile, listPdfFile: listPdfFile };
-    lastCacheTime = Date.now(); return globalCache;
+    lastCacheTime = Date.now(); console.log('[CACHE] Loaded.'); return globalCache;
 }
 
 // ─── AI REPLY ──────────────────────────────────────────────────────────────
 async function getAIReply(userMsg, contextData, prompt) {
     var key = process.env.NVIDIA_API_KEY; if (!key) return null;
-    try { var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', { model: 'meta/llama-3.1-70b-instruct', messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'CONTEXT DATA:\n' + contextData + '\n\nUSER QUERY: ' + userMsg }], max_tokens: 800, temperature: 0.1 }, { headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 30000 }); var reply = res.data.choices[0].message.content; if (!reply || reply.toLowerCase().includes('cannot') || reply.toLowerCase().includes('not found') || reply.toLowerCase().includes('admin will reply')) return null; return sanitizeReply(reply); } catch (e) { return null; }
+    try { var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', { model: 'meta/llama-3.1-70b-instruct', messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'CONTEXT DATA:\n' + contextData + '\n\nUSER QUERY: ' + userMsg }], max_tokens: 800, temperature: 0.1 }, { headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 30000 }); var reply = res.data.choices[0].message.content; if (!reply || reply.toLowerCase().includes('cannot') || reply.toLowerCase().includes('not found') || reply.toLowerCase().includes('admin will reply')) return null; return sanitizeReply(reply); } catch (e) { console.error('[AI] Error:', e.message); return null; }
 }
 
 async function sendText(to, text) { var base = (process.env.EVOLUTION_API_URL||'').replace(/\/$/,''); var inst = process.env.EVOLUTION_INSTANCE; var key = process.env.EVOLUTION_API_KEY; var num = to.replace(/@s\.whatsapp\.net$/,'').replace(/@g\.us$/,''); if (!base||!inst||!key) return; try { await axios.post(base+'/message/sendText/'+inst,{number:num,text:text},{headers:{'Content-Type':'application/json','apikey':key}}); } catch(e){} }
@@ -483,18 +492,17 @@ module.exports = async function(req, res) {
         if (hasSend && hasDLP  && dataResult.listPdfUrl) { await sendDocument(from, dataResult.listPdfUrl, dataResult.listPdfFile, dataResult.listPdfFile); return res.status(200).json({status:'ok'}); }
         for (var k in savedPDFs) { if (lower.includes(k) && hasSend) { await sendDocument(from, savedPDFs[k].url, savedPDFs[k].name, savedPDFs[k].name); return res.status(200).json({status:'ok'}); } }
 
-        // ── 1. EXACT ANALYTICS ROUTING (With Smart Fallback) ────────────
+        // ── 1. EXACT ANALYTICS ROUTING ────────────
         var qIntent = parseDataQuery(text);
         
-        // Smart Catchers for spelling variations
-        if (lower.match(/\b(top|highest|best|zyada|sabse|maximum)\b.*(cust|coust|party|log|client|dukan)/) || lower.includes('top coust') || lower.includes('top cust')) qIntent.type = 'top_customers';
-        else if (lower.match(/\b(top|highest|best|zyada|sabse|maximum)\b.*(prod|item|oil|brand|maal)/) || lower.includes('top prod') || lower.includes('top item')) qIntent.type = 'top_products';
+        if (lower.match(/top.*(cust|coust|party|log|client|dukandar|dukan)/) || lower.match(/(highest|zyada|sabse).*(cust|coust)/)) qIntent.type = 'top_customers';
+        else if (lower.match(/top.*(prod|item|oil|brand|maal)/) || lower.match(/(highest|zyada|sabse).*prod/)) qIntent.type = 'top_products';
         else if (lower.match(/\b(se|se wise|executive|exec|salesman)\b/)) qIntent.type = 'executive_report';
-        else if (lower.match(/\b(total volume|sales summary|kitna bika|total sale)\b/) || (lower.includes('volume') && lower.match(/\b(month|mahine|week|hafte|din|aaj)\b/))) qIntent.type = 'period_summary';
+        else if (lower.match(/\b(total volume|sales summary|kitna bika|total sale)\b/)) qIntent.type = 'period_summary';
 
         if (qIntent.type) {
             var autoDate = false;
-            // Auto Set Default Month if Date is missing
+            // Set Default Month ONLY IF date is missing
             if (!qIntent.filters.dateRange) {
                 var now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
                 var cy = now.getFullYear(); var cm = now.getMonth();
@@ -512,7 +520,7 @@ module.exports = async function(req, res) {
             else if (qIntent.type === 'executive_report') resultText = getExecutiveReport(invoiceMap, qIntent.filters.dateRange);
             else if (qIntent.type === 'period_summary') resultText = getPeriodSummary(invoiceMap, qIntent.filters.dateRange);
 
-            // ✅ MAGIC FIX: Fallback to All-Time if Default Current Month is empty
+            // Fallback: If no data in Current Month, fetch ALL TIME.
             if (autoDate && resultText === 'NO_DATA') {
                 if (qIntent.type === 'top_customers') resultText = "*(Current Month me data nahi mila. All-Time data de raha hu)*\n\n" + getTopCustomers(invoiceMap, null, qIntent.limit);
                 else if (qIntent.type === 'top_products') resultText = "*(Current Month me data nahi mila. All-Time data de raha hu)*\n\n" + getTopProducts(allRows, null, qIntent.limit);
@@ -562,11 +570,11 @@ module.exports = async function(req, res) {
             }
         }
 
-        // ── 4. AI DATA ANALYST FALLBACK (For custom questions like "lowest selling") ──
+        // ── 4. AI DATA ANALYST FALLBACK ──
         var isCustomAnalytics = ['sabse', 'kam', 'lowest', 'low', 'aaj', 'kal', 'din', 'bika', 'invoice', 'bill', 'hisab'].some(function(w){return lower.includes(w);});
 
         if (isCustomAnalytics) {
-            var aiPrompt = 'You are a Data Analyst. Answer the user query using ONLY the [BUSINESS LEDGER] below.\n\nRULES:\n1. If asked about lowest/highest selling or specific queries, find it in the data.\n2. Write in plain Hinglish. NO EMOJIS.\n3. Add EXACTLY this line at the end of your answer: "\n*(Note: Data may incorrect please reverify)*"\n4. If data is not found or query is completely unrelated, reply EXACTLY: "Please wait, admin will reply soon."';
+            var aiPrompt = 'You are a Data Analyst. Answer the user query using ONLY the [FULL BUSINESS LEDGER] below.\n\nRULES:\n1. If asked about lowest/highest selling or specific queries, find it in the data.\n2. Write in plain Hinglish. NO EMOJIS.\n3. Add EXACTLY this line at the end of your answer: "\n*(Note: Data may incorrect please reverify)*"\n4. If data is not found or query is completely unrelated, reply EXACTLY: "Please wait, admin will reply soon."';
             
             var bizSummary = generateDeepBusinessSummary(allRows);
             var aiReply = await getAIReply(text, bizSummary, aiPrompt);
