@@ -37,8 +37,13 @@ async function allowNumber(num) { var d = getFirebase(); if (d) { try { await d.
 async function blockNumber(num) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/allowedNumbers/' + num).remove(); } catch(e){} } }
 
 async function getBotSettings() {
-    var d = getFirebase(); if (!d) return { botEnabled: true, aiEnabled: true };
-    try { var s = await d.ref('botConfig/settings').get(); return s.exists() ? s.val() : { botEnabled: true, aiEnabled: true }; } catch(e) { return { botEnabled: true, aiEnabled: true }; }
+    var d = getFirebase(); 
+    var defaultSettings = { botEnabled: true, aiEnabled: true, stockEnabled: true };
+    if (!d) return defaultSettings;
+    try { 
+        var s = await d.ref('botConfig/settings').get(); 
+        return s.exists() ? Object.assign(defaultSettings, s.val()) : defaultSettings; 
+    } catch(e) { return defaultSettings; }
 }
 async function updateBotSetting(key, val) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/settings/' + key).set(val); } catch(e){} } }
 
@@ -95,67 +100,57 @@ function extractDateRange(text) {
     var monthNames = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
     var monthFull = ['january','february','march','april','may','june','july','august','september','october','november','december'];
     
+    var getMonthIdx = function(str) {
+        for (var i=0; i<12; i++) {
+            if (str.includes(monthNames[i])) return i;
+        }
+        return -1;
+    };
+
     var yearMatch = lower.match(/\b(202\d)\b/);
-    var targetYear = yearMatch ? parseInt(yearMatch[1]) : null;
+    var targetYear = yearMatch ? parseInt(yearMatch[1]) : cy;
 
-    var targetMonth = -1;
-    for(var i=0; i<12; i++){
-        if(lower.match(new RegExp("\\b" + monthFull[i] + "\\b")) || lower.match(new RegExp("\\b" + monthNames[i] + "\\b"))) {
-            targetMonth = i; break;
+    var r1 = lower.match(/(\d{1,2})\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(?:to|-|se|tak|till)\s*(\d{1,2})\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*/);
+    if (r1) {
+        var m1 = getMonthIdx(r1[2]), m2 = getMonthIdx(r1[4]);
+        return { from: toTS(targetYear, m1, parseInt(r1[1])), to: toTS(targetYear, m2, parseInt(r1[3]), 23, 59, 59), label: r1[1] + ' ' + monthFull[m1].toUpperCase() + ' to ' + r1[3] + ' ' + monthFull[m2].toUpperCase() + ' ' + targetYear };
+    }
+
+    var r2 = lower.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s*(?:to|-|se|tak|till)\s*(\d{1,2})\s*(?:st|nd|rd|th)?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*/);
+    if (r2) {
+        var mIdx = getMonthIdx(r2[3]);
+        return { from: toTS(targetYear, mIdx, parseInt(r2[1])), to: toTS(targetYear, mIdx, parseInt(r2[2]), 23, 59, 59), label: r2[1] + ' to ' + r2[2] + ' ' + monthFull[mIdx].toUpperCase() + ' ' + targetYear };
+    }
+
+    var r3 = lower.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*/);
+    if (r3) {
+        var mIdx = getMonthIdx(r3[2]);
+        if (mIdx !== -1) {
+            return { from: toTS(targetYear, mIdx, parseInt(r3[1]), 0, 0, 0), to: toTS(targetYear, mIdx, parseInt(r3[1]), 23, 59, 59), label: r3[1] + ' ' + monthFull[mIdx].toUpperCase() + ' ' + targetYear };
         }
     }
 
-    if (targetYear === null) {
-        targetYear = (targetMonth > cm) ? cy - 1 : cy; 
-        if (targetMonth === -1) targetYear = cy;
-    }
-
-    var rangeMatch = lower.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s*(?:to|-|se)\s*(\d{1,2})\s*(?:st|nd|rd|th)?/);
-    if (rangeMatch && targetMonth !== -1) {
-        return { from: toTS(targetYear, targetMonth, parseInt(rangeMatch[1])), to: toTS(targetYear, targetMonth, parseInt(rangeMatch[2]), 23, 59, 59), label: rangeMatch[1] + ' to ' + rangeMatch[2] + ' ' + monthFull[targetMonth].toUpperCase() + ' ' + targetYear, exactMonth: targetMonth };
-    }
-    if (rangeMatch && targetMonth === -1) {
-        return { from: toTS(cy, cm, parseInt(rangeMatch[1])), to: toTS(cy, cm, parseInt(rangeMatch[2]), 23, 59, 59), label: rangeMatch[1] + ' to ' + rangeMatch[2] + ' ' + monthFull[cm].toUpperCase() + ' ' + cy };
-    }
-
-    var singleDateMatch = lower.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*/);
-    if (singleDateMatch) {
-        var day = parseInt(singleDateMatch[1]);
-        var mStr = singleDateMatch[2];
-        var tm = monthNames.indexOf(mStr);
-        if (tm !== -1) {
-            var y = yearMatch ? targetYear : (tm > cm ? cy - 1 : cy);
-            return { from: toTS(y, tm, day, 0, 0, 0), to: toTS(y, tm, day, 23, 59, 59), label: day + ' ' + monthFull[tm].toUpperCase() + ' ' + y, exactMonth: tm };
-        }
-    }
-
-    if (lower.includes('1st week') || lower.includes('first week') || lower.includes('pehla hafta') || lower.includes('week 1')) {
-        var tm = targetMonth !== -1 ? targetMonth : cm;
-        return { from: toTS(targetYear, tm, 1), to: toTS(targetYear, tm, 7, 23, 59, 59), label: '1st Week of ' + monthFull[tm].toUpperCase() + ' ' + targetYear, exactMonth: tm };
-    }
-
+    var targetMonth = getMonthIdx(lower);
     if (targetMonth !== -1) {
-        return { from: toTS(targetYear, targetMonth, 1), to: toTS(targetYear, targetMonth + 1, 0, 23, 59, 59), label: monthFull[targetMonth].toUpperCase() + ' ' + targetYear, exactMonth: targetMonth };
+        if (lower.includes('1st week') || lower.includes('first week') || lower.includes('pehla hafta') || lower.includes('week 1')) {
+            return { from: toTS(targetYear, targetMonth, 1), to: toTS(targetYear, targetMonth, 7, 23, 59, 59), label: '1st Week of ' + monthFull[targetMonth].toUpperCase() + ' ' + targetYear };
+        }
+        return { from: toTS(targetYear, targetMonth, 1), to: toTS(targetYear, targetMonth + 1, 0, 23, 59, 59), label: monthFull[targetMonth].toUpperCase() + ' ' + targetYear };
     }
-    
+
+    var d = now.getDay() === 0 ? 6 : now.getDay() - 1; 
     if (lower.match(/\btoday\b|\baaj\b/)) return { from: toTS(cy, cm, cd), to: toTS(cy, cm, cd, 23, 59, 59), label: 'Today' };
     if (lower.match(/\byesterday\b|\bkal\b/)) return { from: toTS(cy, cm, cd - 1), to: toTS(cy, cm, cd - 1, 23, 59, 59), label: 'Yesterday' };
-    if (lower.match(/\bthis\s*week\b|\bis\s*hafte\b|\bchalu\s*hafte\b/)) {
-        var d = now.getDay() === 0 ? 6 : now.getDay() - 1;
-        return { from: toTS(cy, cm, cd - d), to: toTS(cy, cm, cd + (6 - d), 23, 59, 59), label: 'This Week' };
-    }
-    if (lower.match(/\blast\s*week\b|\bpichla\s*hafte\b|\bpichhle\s*hafte\b|\bprevious\s*week\b/)) {
-        var d2 = now.getDay() === 0 ? 6 : now.getDay() - 1;
-        return { from: toTS(cy, cm, cd - d2 - 7), to: toTS(cy, cm, cd - d2 - 1, 23, 59, 59), label: 'Last Week' };
-    }
-    if (lower.match(/\bthis\s*month\b|\bis\s*mahine\b|\bchalu\s*mahine\b/)) {
-        return { from: toTS(cy, cm, 1), to: toTS(cy, cm + 1, 0, 23, 59, 59), label: 'This Month' };
-    }
+    if (lower.match(/\bthis\s*week\b|\bis\s*hafte\b|\bchalu\s*hafte\b/)) return { from: toTS(cy, cm, cd - d), to: toTS(cy, cm, cd + (6 - d), 23, 59, 59), label: 'This Week' };
+    if (lower.match(/\blast\s*week\b|\bpichla\s*hafte\b|\bpichhle\s*hafte\b|\bprevious\s*week\b/)) return { from: toTS(cy, cm, cd - d - 7), to: toTS(cy, cm, cd - d - 1, 23, 59, 59), label: 'Last Week' };
+    if (lower.match(/\bnext\s*week\b|\bagla\s*hafte\b|\bagle\s*hafte\b/)) return { from: toTS(cy, cm, cd - d + 7), to: toTS(cy, cm, cd - d + 13, 23, 59, 59), label: 'Next Week' };
+    if (lower.match(/\bthis\s*month\b|\bis\s*mahine\b|\bchalu\s*mahine\b/)) return { from: toTS(cy, cm, 1), to: toTS(cy, cm + 1, 0, 23, 59, 59), label: 'This Month' };
     if (lower.match(/\blast\s*month\b|\bpichla\s*mahine\b|\bprevious\s*month\b/)) {
         var lm = cm === 0 ? 11 : cm - 1;
         var ly = cm === 0 ? cy - 1 : cy;
         return { from: toTS(ly, lm, 1), to: toTS(ly, lm + 1, 0, 23, 59, 59), label: 'Last Month' };
     }
+    
     return null;
 }
 
@@ -178,14 +173,9 @@ function parseDataQuery(text) {
 function isDateInRange(ts, dateRange) {
     if (!dateRange) return true; 
     if (ts <= 0) return false; 
-    if (dateRange.exactMonth !== undefined) {
-        var d = new Date(ts);
-        if (d.getMonth() === dateRange.exactMonth) return true;
-    }
     return (ts >= dateRange.from && ts <= dateRange.to);
 }
 
-// ─── SIZE NORMALIZER ───────────────────────────────────────────────────────
 function normalizeSizeHeader(header) {
     if (!header) return '';
     var h = String(header).toLowerCase().replace(/\s+/g,'').replace(/\/+$/,'').replace(/\\+$/,'');
@@ -215,11 +205,12 @@ function loadPriceListFromExcel(wb) {
     return priceMap;
 }
 
-// ─── PRODUCT SEARCH ────────────────────────────────────────────────────────
+// ─── SEARCH FUNCTIONS ──────────────────────────────────────────────────────
 function searchProducts(query, mrpMap, dlpMap) {
+    if (query.startsWith('!')) return []; 
     var q = query.toLowerCase().replace(/[^a-z0-9]/g, ' ');
     var stopWords = ['price','rate','mrp','dlp','kya','hai','batao','aur','ka','ke','liye','ye','pucha','list'];
-    var searchTerms = q.split(/\s+/).filter(function(w){ return w.length > 1 && stopWords.indexOf(w) === -1; });
+    var searchTerms = q.split(/\s+/).filter(function(w){ return w.length > 2 && stopWords.indexOf(w) === -1; });
     if (searchTerms.length === 0) return [];
     var combined = {};
     for (var mName in mrpMap) { var norm = mName.toLowerCase().replace(/[^a-z0-9]/g, ''); if (!combined[norm]) combined[norm] = { orig: mName, sizes: {} }; for (var sz in mrpMap[mName]) { if (!combined[norm].sizes[sz]) combined[norm].sizes[sz] = {}; combined[norm].sizes[sz].mrp = mrpMap[mName][sz]; } }
@@ -240,7 +231,6 @@ function searchInvoices(query, invoiceMap) {
         var rows = invoiceMap[invNo]; 
         var custName = (rows[0]['Customer Name'] || '').toLowerCase().replace(/[^a-z0-9 ]/g, ''); 
         var invClean = invNo.replace(/[^a-zA-Z0-9]/g, '').toLowerCase(); 
-        
         var exactMatch = (invClean === qClean);
         var endsWithMatch = invClean.endsWith(qClean);
         var matchInv = (invClean.indexOf(qClean) !== -1); 
@@ -283,6 +273,26 @@ function searchCustomers(query, invoiceMap) {
         if (score > 0) matches.push({ name: c, score: score });
     }
     matches.sort(function(a,b){ return b.score - a.score; });
+    return matches.slice(0, 5);
+}
+
+// ─── ✅ NEW: STOCK SEARCH ENGINE ───────────────────────────────────────────
+function searchStock(query, stockMap) {
+    var q = query.toLowerCase().replace(/[^a-z0-9]/g, ' ');
+    var stopWords = ['stock', 'batao', 'kya', 'hai', 'kitna', 'ka', 'dikhao', 'check'];
+    var searchTerms = q.split(/\s+/).filter(w => w.length > 1 && !stopWords.includes(w));
+    if (searchTerms.length === 0) return [];
+    
+    var matches = [];
+    for (var pName in stockMap) {
+        var norm = pName.toLowerCase().replace(/[^a-z0-9]/g, '');
+        var score = 0;
+        for (var t of searchTerms) { if (norm.includes(t)) score++; }
+        if (score >= Math.min(2, Math.max(1, searchTerms.length - 1))) {
+            matches.push({ name: pName, pack: stockMap[pName].pack, ltr: stockMap[pName].ltr, score: score });
+        }
+    }
+    matches.sort((a,b) => b.score - a.score);
     return matches.slice(0, 5);
 }
 
@@ -344,9 +354,7 @@ function getTopProducts(allRows, dateRange, limit) {
 }
 
 function getExecutiveReport(invoiceMap, dateRange) {
-    var execMap = {}; 
-    var grandVol = 0, grandVal = 0, grandCount = 0;
-    
+    var execMap = {}; var grandVol = 0, grandVal = 0, grandCount = 0;
     for (var inv in invoiceMap) { 
         var rows = invoiceMap[inv]; 
         var ts = getTimestamp(rows[0]['Invoice Date']);
@@ -359,13 +367,10 @@ function getExecutiveReport(invoiceMap, dateRange) {
         rows.forEach(function(r){ 
             var v = parseFloat(r['Product Volume'])||0;
             var val = parseFloat(r['Total Value incl VAT/GST'])||0;
-            execMap[exec].vol += v; 
-            execMap[exec].val += val; 
-            grandVol += v;
-            grandVal += val;
+            execMap[exec].vol += v; execMap[exec].val += val; 
+            grandVol += v; grandVal += val;
         }); 
-        execMap[exec].count++; 
-        grandCount++;
+        execMap[exec].count++; grandCount++;
     }
     var keys = Object.keys(execMap);
     if (keys.length === 0) return 'NO_DATA'; 
@@ -377,10 +382,7 @@ function getExecutiveReport(invoiceMap, dateRange) {
         var s = execMap[exec]; 
         msg += '*' + exec + '*\n   Vol: ' + s.vol.toFixed(1) + 'L | Val: Rs.' + s.val.toFixed(0) + ' | Bills: ' + s.count + '\n\n'; 
     }); 
-    
-    msg += '----------------------\n';
-    msg += '*📌 Grand Total*\n';
-    msg += 'Vol: ' + grandVol.toFixed(1) + 'L | Val: Rs.' + grandVal.toFixed(0) + ' | Bills: ' + grandCount;
+    msg += '----------------------\n*📌 Grand Total*\nVol: ' + grandVol.toFixed(1) + 'L | Val: Rs.' + grandVal.toFixed(0) + ' | Bills: ' + grandCount;
     return msg.trim();
 }
 
@@ -390,19 +392,13 @@ function getPeriodSummary(invoiceMap, dateRange) {
         var rows = invoiceMap[inv];
         var ts = getTimestamp(rows[0]['Invoice Date']);
         if (!isDateInRange(ts, dateRange)) continue;
-        
-        rows.forEach(function(r) {
-            totalVol += parseFloat(r['Product Volume']) || 0;
-            totalVal += parseFloat(r['Total Value incl VAT/GST']) || 0;
-        });
+        rows.forEach(function(r) { totalVol += parseFloat(r['Product Volume']) || 0; totalVal += parseFloat(r['Total Value incl VAT/GST']) || 0; });
         count++;
     }
     if (count === 0) return 'NO_DATA';
     var msg = '*Sales Summary*\n';
     if (dateRange && dateRange.label) msg += '*Period:* ' + dateRange.label + '\n';
-    msg += '\n*Total Volume:* ' + totalVol.toFixed(1) + ' L\n';
-    msg += '*Total Value:* Rs.' + totalVal.toFixed(2) + '\n';
-    msg += '*Total Invoices:* ' + count;
+    msg += '\n*Total Volume:* ' + totalVol.toFixed(1) + ' L\n*Total Value:* Rs.' + totalVal.toFixed(2) + '\n*Total Invoices:* ' + count;
     return msg;
 }
 
@@ -470,26 +466,68 @@ function generateDeepBusinessSummary(allRows) {
     return summary.slice(0, 100000); 
 }
 
-// ─── LOAD ALL DATA ─────────────────────────────────────────────────────────
+// ─── LOAD ALL DATA (UPDATED TO INCLUDE STOCK FILE) ─────────────────────────
 async function loadAllData() {
     if (globalCache && (Date.now() - lastCacheTime < 3600000)) return globalCache;
     var base = process.env.GITHUB_RAW_BASE; if (!base) return null;
     var fileList = []; try { fileList = (await axios.get(base+'/index.json')).data; } catch(e){ return null; }
-    var excelFiles = fileList.filter(function(f){ return f.match(/\.(xlsx|xls|csv)$/i) && !f.toLowerCase().includes('mrp') && !f.toLowerCase().includes('dlp') && !f.toLowerCase().includes('list'); });
-    var allRows = []; for (var k = 0; k < excelFiles.length; k++) { try { var res = await axios.get(base+'/'+encodeURIComponent(excelFiles[k]),{responseType:'arraybuffer'}); var wb = XLSX.read(res.data,{type:'buffer'}); for (var s = 0; s < wb.SheetNames.length; s++) { allRows = allRows.concat(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[s]],{defval:''})); } } catch(e){} }
-    var invoiceMap = {}; for (var m = 0; m < allRows.length; m++) { var inv = allRows[m]['Invoice No']||''; if(inv){if(!invoiceMap[inv])invoiceMap[inv]=[];invoiceMap[inv].push(allRows[m]);} }
+    
+    // Invoices
+    var excelFiles = fileList.filter(function(f){ return f.match(/\.(xlsx|xls|csv)$/i) && !f.toLowerCase().includes('mrp') && !f.toLowerCase().includes('dlp') && !f.toLowerCase().includes('list') && !f.toLowerCase().includes('stock'); });
+    var allRows = []; 
+    for (var k = 0; k < excelFiles.length; k++) { 
+        try { var res = await axios.get(base+'/'+encodeURIComponent(excelFiles[k]),{responseType:'arraybuffer'}); var wb = XLSX.read(res.data,{type:'buffer'}); for (var s = 0; s < wb.SheetNames.length; s++) { allRows = allRows.concat(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[s]],{defval:''})); } } catch(e){} 
+    }
+    var invoiceMap = {}; 
+    for (var m = 0; m < allRows.length; m++) { var inv = allRows[m]['Invoice No']||''; if(inv){if(!invoiceMap[inv])invoiceMap[inv]=[];invoiceMap[inv].push(allRows[m]);} }
+    
+    // Price Lists
     var mrpFile = fileList.find(function(f){ return f.toLowerCase().includes('mrp') && f.match(/\.(xlsx|xls)$/i); }); var mrpMap  = {}; if (mrpFile) { try { var r2 = await axios.get(base+'/'+encodeURIComponent(mrpFile),{responseType:'arraybuffer'}); mrpMap = loadPriceListFromExcel(XLSX.read(r2.data,{type:'buffer'})); } catch(e){} }
     var dlpFile = fileList.find(function(f){ return (f.toLowerCase().includes('dlp')||f.toLowerCase().includes('list')) && !f.toLowerCase().includes('mrp') && f.match(/\.(xlsx|xls)$/i); }); var dlpMap  = {}; if (dlpFile) { try { var r3 = await axios.get(base+'/'+encodeURIComponent(dlpFile),{responseType:'arraybuffer'}); dlpMap = loadPriceListFromExcel(XLSX.read(r3.data,{type:'buffer'})); } catch(e){} }
+    
+    // PDFs
     var mrpPdfFile  = fileList.find(function(f){ return f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); }); var listPdfFile = fileList.find(function(f){ return (f.toLowerCase().includes('list')||f.toLowerCase().includes('dlp')) && !f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); });
     var mrpPdfUrl   = mrpPdfFile  ? base+'/'+encodeURIComponent(mrpPdfFile)  : ''; var listPdfUrl  = listPdfFile ? base+'/'+encodeURIComponent(listPdfFile) : '';
-    globalCache = { invoiceMap: invoiceMap, allRows: allRows, mrpMap: mrpMap, dlpMap: dlpMap, mrpFile: mrpFile, dlpFile: dlpFile, mrpPdfUrl: mrpPdfUrl, listPdfUrl: listPdfUrl, mrpPdfFile: mrpPdfFile, listPdfFile: listPdfFile };
-    lastCacheTime = Date.now(); console.log('[CACHE] Loaded.'); return globalCache;
+
+    // ✅ NEW: STOCK DATA
+    var stockFile = fileList.find(function(f){ return f.toLowerCase().includes('stock') && f.match(/\.(xlsx|xls|csv)$/i); });
+    var stockMap = {};
+    if (stockFile) {
+        try {
+            var sr = await axios.get(base+'/'+encodeURIComponent(stockFile), {responseType:'arraybuffer'});
+            var sWb = XLSX.read(sr.data, {type:'buffer'});
+            for (var s = 0; s < sWb.SheetNames.length; s++) { 
+                var rows = XLSX.utils.sheet_to_json(sWb.Sheets[sWb.SheetNames[s]], {defval:''});
+                for (var i=0; i<rows.length; i++) {
+                    var r = rows[i];
+                    var pName = r['Product Description'] || r['Product Name'] || r['Item Name'] || r['Description'];
+                    if (!pName) continue;
+                    pName = String(pName).trim();
+                    if (!stockMap[pName]) stockMap[pName] = { pack: 0, ltr: 0 };
+                    
+                    var pack = parseFloat(r['Qty(Pack)'] || r['Pack Qty'] || r['Qty']) || 0;
+                    var ltr = parseFloat(r['Qty(EA/Ltrs/Kg)'] || r['Ltrs'] || r['Volume']) || 0;
+                    
+                    stockMap[pName].pack += pack;
+                    stockMap[pName].ltr += ltr;
+                }
+            }
+        } catch(e){}
+    }
+
+    globalCache = { 
+        invoiceMap: invoiceMap, allRows: allRows, mrpMap: mrpMap, dlpMap: dlpMap, 
+        mrpFile: mrpFile, dlpFile: dlpFile, mrpPdfUrl: mrpPdfUrl, listPdfUrl: listPdfUrl, 
+        mrpPdfFile: mrpPdfFile, listPdfFile: listPdfFile,
+        stockMap: stockMap // Saved into cache
+    };
+    lastCacheTime = Date.now(); return globalCache;
 }
 
 // ─── AI REPLY ──────────────────────────────────────────────────────────────
 async function getAIReply(userMsg, contextData, prompt) {
     var key = process.env.NVIDIA_API_KEY; if (!key) return null;
-    try { var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', { model: 'meta/llama-3.1-70b-instruct', messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'CONTEXT DATA:\n' + contextData + '\n\nUSER QUERY: ' + userMsg }], max_tokens: 800, temperature: 0.1 }, { headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 30000 }); var reply = res.data.choices[0].message.content; if (!reply || reply.toLowerCase().includes('cannot') || reply.toLowerCase().includes('not found') || reply.toLowerCase().includes('admin will reply')) return null; return sanitizeReply(reply); } catch (e) { console.error('[AI] Error:', e.message); return null; }
+    try { var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', { model: 'meta/llama-3.1-70b-instruct', messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'CONTEXT DATA:\n' + contextData + '\n\nUSER QUERY: ' + userMsg }], max_tokens: 800, temperature: 0.1 }, { headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 30000 }); var reply = res.data.choices[0].message.content; if (!reply || reply.toLowerCase().includes('cannot') || reply.toLowerCase().includes('not found') || reply.toLowerCase().includes('admin will reply')) return null; return sanitizeReply(reply); } catch (e) { return null; }
 }
 
 async function sendText(to, text) { var base = (process.env.EVOLUTION_API_URL||'').replace(/\/$/,''); var inst = process.env.EVOLUTION_INSTANCE; var key = process.env.EVOLUTION_API_KEY; var num = to.replace(/@s\.whatsapp\.net$/,'').replace(/@g\.us$/,''); if (!base||!inst||!key) return; try { await axios.post(base+'/message/sendText/'+inst,{number:num,text:text},{headers:{'Content-Type':'application/json','apikey':key}}); } catch(e){} }
@@ -511,28 +549,18 @@ module.exports = async function(req, res) {
         var safeFrom = sanitizePath(from);
         var database = getFirebase();
 
-        // Load all configs and data at once
         var results = await Promise.all([getSystemPrompt(), loadAllData(), getPDFList(), isWhitelistActive(), getAllowedNumbers(), getBotSettings(), getAdmins()]);
         var sysPrompt = results[0]; var dataResult = results[1]||{}; var savedPDFs = results[2];
         var wlActive = results[3]; var allowedNums = results[4]; var settings = results[5]; var adminDict = results[6];
         
         var invoiceMap = dataResult.invoiceMap || {}; var mrpMap = dataResult.mrpMap || {}; var dlpMap = dataResult.dlpMap || {}; var allRows = dataResult.allRows || [];
 
-        // Check if user is Admin
         var isAdmin = (pureNumber === envAdmin) || adminDict[pureNumber];
 
-        // ── 🚨 GLOBAL BOT TOGGLE 🚨 ──
-        if (!settings.botEnabled && !isAdmin) {
-            return res.status(200).send('Bot is OFF');
-        }
+        if (!settings.botEnabled && !isAdmin) return res.status(200).send('Bot is OFF');
+        if (!isAdmin && wlActive && !allowedNums[pureNumber]) return res.status(200).send('Blocked by Whitelist'); 
 
-        // ── 🚨 WHITELIST SECURITY CHECK 🚨 ──
-        if (!isAdmin && wlActive && !allowedNums[pureNumber]) {
-            console.log('[WHITELIST] Blocked: ' + pureNumber);
-            return res.status(200).send('Blocked by Whitelist'); 
-        }
-
-        // ── PENDING SELECTION (Options Menu) ──────────────────────────────────
+        // ── PENDING SELECTION ──────────────────────────────────────────────
         if (/^\d+$/.test(text)) {
             var pending = null;
             try { var snap = await database.ref('pending/' + safeFrom).get(); if(snap.exists()) pending = snap.val(); } catch(e){}
@@ -549,6 +577,11 @@ module.exports = async function(req, res) {
                         await sendText(from, aiR || 'Data nahi mila.'); 
                     }
                     else if (pending.type === 'customer_report') { var cReport = getCustomerReport(pending.matches[idx].name, invoiceMap, pending.dateRange, pending.lastOnly); await sendText(from, cReport); }
+                    else if (pending.type === 'stock') {
+                        var sm = pending.matches[idx];
+                        var sMsg = '*Stock Details*\nProduct: ' + sm.name + '\nQty (Pack): ' + sm.pack.toFixed(2) + '\nQty (Ltrs/Kg): ' + sm.ltr.toFixed(2) + '\n\n*(Note: Stock may vary)*';
+                        await sendText(from, sMsg);
+                    }
                     
                     try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
                     delete memoryPending[safeFrom];
@@ -570,6 +603,10 @@ module.exports = async function(req, res) {
             if (text === '!ai off') { await updateBotSetting('aiEnabled', false); await sendText(from, '🔴 *AI (!ask) is now OFF*\nCustomers ab AI se nahi pooch sakte.'); return res.status(200).json({status: 'ok'}); }
             if (text === '!ai on') { await updateBotSetting('aiEnabled', true); await sendText(from, '🟢 *AI (!ask) is now ON*\nCustomers ab AI command use kar sakte hain.'); return res.status(200).json({status: 'ok'}); }
 
+            // ✅ NEW STOCK TOGGLE COMMANDS
+            if (text === '!stock off') { await updateBotSetting('stockEnabled', false); await sendText(from, '🔴 *Stock is now OFF*\nKoi bhi customer stock nahi dekh paayega.'); return res.status(200).json({status: 'ok'}); }
+            if (text === '!stock on') { await updateBotSetting('stockEnabled', true); await sendText(from, '🟢 *Stock is now ON*\nStock check public ke liye active hai.'); return res.status(200).json({status: 'ok'}); }
+
             if (text === '!whitelist on') { await setWhitelistActive(true); await sendText(from, '🔒 *Whitelist ON*\nSirf allowed numbers allowed hain.'); return res.status(200).json({ status: 'ok' }); }
             if (text === '!whitelist off') { await setWhitelistActive(false); await sendText(from, '🔓 *Whitelist OFF*\nBot sabke liye khula hai.'); return res.status(200).json({ status: 'ok' }); }
             
@@ -581,12 +618,12 @@ module.exports = async function(req, res) {
             if (text === '!listallowed') { var keys = Object.keys(allowedNums); if (keys.length === 0) await sendText(from, 'Koi number whitelist nahi hai.'); else await sendText(from, '*Allowed Numbers:*\n' + keys.join('\n')); return res.status(200).json({ status: 'ok' }); }
             
             if (text.indexOf('!setprompt ') === 0)  { await saveSystemPrompt(text.slice(11).trim()); await sendText(from, 'Prompt update ho gaya!'); return res.status(200).json({ status: 'ok' }); }
-            if (text === '!status')  { await sendText(from, '*Bot Status*\nBot: ' + (settings.botEnabled ? 'ON' : 'OFF') + '\nAI: ' + (settings.aiEnabled ? 'ON' : 'OFF') + '\nWhitelist: ' + (wlActive ? 'ON' : 'OFF')); return res.status(200).json({ status: 'ok' }); }
+            if (text === '!status')  { await sendText(from, '*Bot Status*\nBot: ' + (settings.botEnabled ? 'ON' : 'OFF') + '\nAI: ' + (settings.aiEnabled ? 'ON' : 'OFF') + '\nStock: ' + (settings.stockEnabled ? 'ON' : 'OFF') + '\nWhitelist: ' + (wlActive ? 'ON' : 'OFF')); return res.status(200).json({ status: 'ok' }); }
             if (text === '!clearcache') { globalCache = null; await sendText(from, 'Cache cleared!'); return res.status(200).json({ status: 'ok' }); }
             
             if (text === '!commands') {
                 var cMsg = "👑 *Admin Master Commands:*\n\n" +
-                           "🤖 *Bot Toggles:*\n!bot on / !bot off\n!ai on / !ai off\n\n" +
+                           "🤖 *Bot Toggles:*\n!bot on / !bot off\n!ai on / !ai off\n!stock on / !stock off\n\n" +
                            "🔒 *Security:*\n!whitelist on / !whitelist off\n!allow <9199XXXXXX>\n!block <9199XXXXXX>\n!listallowed\n\n" +
                            "👨‍💼 *Roles:*\n!addadmin <9199XXXXXX>\n\n" +
                            "🛠️ *System:*\n!status\n!clearcache\n!setprompt <text>\n\n" +
@@ -596,22 +633,22 @@ module.exports = async function(req, res) {
             }
         }
 
-        // ── 🌍 THE PUBLIC `!ASK` COMMAND (WITH TOGGLE) ─────────────────────
-        if (lower.startsWith('!ask ')) {
+        // ── 🌍 THE PUBLIC `!ASK` COMMAND ─────────────────────
+        if (lower.startsWith('!ask ') || (isAdmin && lower.startsWith('!ai '))) {
             if (!settings.aiEnabled && !isAdmin) {
                 await sendText(from, "❌ Bhai, AI features abhi admin dvara disable kiye gaye hain.");
                 return res.status(200).json({ status: 'ok' });
             }
-            var publicAiQuery = text.slice(5).trim();
+            var aiQuery = lower.startsWith('!ask ') ? text.slice(5).trim() : text.slice(4).trim();
             var publicAiPrompt = 'You are Krish, a helpful assistant. Answer the user query using the CONTEXT DATA if related to business, otherwise answer from general knowledge. If you do not know, say "Bhai, iska jawab mujhe nahi pata." NO EMOJIS.';
             var bizSummaryAI = generateDeepBusinessSummary(allRows);
-            var aiReplyText = await getAIReply(publicAiQuery, bizSummaryAI, publicAiPrompt);
+            var aiReplyText = await getAIReply(aiQuery, bizSummaryAI, publicAiPrompt);
             await sendText(from, aiReplyText || "Bhai, iska jawab mujhe nahi pata."); 
             return res.status(200).json({ status: 'ok' });
         }
 
         // ── GREETING ───────────────────────────────────────────────────────
-        if (['hi','hello','namaste','hey','hii','good morning','kaise ho','helo','ok','okay'].some(function(g){return lower===g||lower.startsWith(g+' ');})) { await sendText(from, 'Hello! Main Krish hoon, Shri Laxmi Auto Store ki assistant.\nInvoice details, MRP/DLP rates, customer reports pooch sakte hain!'); return res.status(200).json({ status: 'ok' }); }
+        if (['hi','hello','namaste','hey','hii','good morning','kaise ho','helo','ok','okay'].some(function(g){return lower===g||lower.startsWith(g+' ');})) { await sendText(from, 'Hello! Main Krish hoon, Shri Laxmi Auto Store ki assistant.\nInvoice details, MRP/DLP rates, Stock, aur customer reports pooch sakte hain!'); return res.status(200).json({ status: 'ok' }); }
 
         // ── PDF SEND ───────────────────────────────────────────────────────
         var hasSend = ['send','bhejo','share','bhej','de do','chahiye','pdf'].some(function(w){return lower.includes(w);});
@@ -620,6 +657,43 @@ module.exports = async function(req, res) {
         if (hasSend && hasMRP  && dataResult.mrpPdfUrl)  { await sendDocument(from, dataResult.mrpPdfUrl,  dataResult.mrpPdfFile,  dataResult.mrpPdfFile);  return res.status(200).json({status:'ok'}); }
         if (hasSend && hasDLP  && dataResult.listPdfUrl) { await sendDocument(from, dataResult.listPdfUrl, dataResult.listPdfFile, dataResult.listPdfFile); return res.status(200).json({status:'ok'}); }
         for (var k in savedPDFs) { if (lower.includes(k) && hasSend) { await sendDocument(from, savedPDFs[k].url, savedPDFs[k].name, savedPDFs[k].name); return res.status(200).json({status:'ok'}); } }
+
+
+        // ── 📦 NEW: STOCK INQUIRY LOGIC ────────────────────────────────────
+        if (lower.includes('stock')) {
+            if (!settings.stockEnabled && !isAdmin) {
+                await sendText(from, 'Please wait, admin will reply soon.');
+                return res.status(200).json({status:'ok'});
+            }
+
+            var cleanStockQuery = lower.replace('stock', '').trim();
+            if (cleanStockQuery.length < 3) {
+                await sendText(from, 'Bhai, kis chiz ka stock batau? Product ka naam likhein (Jaise: Castrol 1L ka stock).');
+                return res.status(200).json({status:'ok'});
+            }
+
+            var sMatches = searchStock(cleanStockQuery, dataResult.stockMap || {});
+            
+            if (sMatches.length === 0) {
+                await sendText(from, 'Bhai, is product ka koi stock list mein nahi mila.');
+                return res.status(200).json({status:'ok'});
+            }
+            if (sMatches.length === 1) {
+                var sm = sMatches[0];
+                var sMsg = '*Stock Details*\nProduct: ' + sm.name + '\nQty (Pack): ' + sm.pack.toFixed(2) + '\nQty (Ltrs/Kg): ' + sm.ltr.toFixed(2) + '\n\n*(Note: Stock may vary)*';
+                await sendText(from, sMsg);
+                return res.status(200).json({status:'ok'});
+            }
+            
+            var multiMsg = '*Multiple products found. Kaunse product ka stock dekhna hai? Number reply karein:*\n\n';
+            sMatches.forEach(function(p, i) { multiMsg += (i+1)+'. '+p.name+'\n'; });
+            var pendStock = { type:'stock', matches:sMatches, ts:Date.now() };
+            try { await database.ref('pending/'+safeFrom).set(pendStock); } catch(e){}
+            memoryPending[safeFrom] = pendStock;
+            await sendText(from, multiMsg);
+            return res.status(200).json({status:'ok'});
+        }
+
 
         // ── 1. EXACT ANALYTICS ROUTING ────────────
         var qIntent = parseDataQuery(text);
@@ -631,7 +705,6 @@ module.exports = async function(req, res) {
 
         if (qIntent.type) {
             var autoDate = false;
-            // Set Default Month ONLY IF date is missing
             if (!qIntent.filters.dateRange) {
                 var now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
                 var cy = now.getFullYear(); var cm = now.getMonth();
@@ -649,7 +722,6 @@ module.exports = async function(req, res) {
             else if (qIntent.type === 'executive_report') resultText = getExecutiveReport(invoiceMap, qIntent.filters.dateRange);
             else if (qIntent.type === 'period_summary') resultText = getPeriodSummary(invoiceMap, qIntent.filters.dateRange);
 
-            // Fallback: If no data in Current Month, fetch ALL TIME.
             if (autoDate && resultText === 'NO_DATA') {
                 if (qIntent.type === 'top_customers') resultText = "*(Current Month me data nahi mila. All-Time data de raha hu)*\n\n" + getTopCustomers(invoiceMap, null, qIntent.limit);
                 else if (qIntent.type === 'top_products') resultText = "*(Current Month me data nahi mila. All-Time data de raha hu)*\n\n" + getTopProducts(allRows, null, qIntent.limit);
@@ -666,7 +738,6 @@ module.exports = async function(req, res) {
         }
 
         // ── 2. PRICE & INVOICE SEARCH ──────────
-        // FIX: Ignore price/invoice search if command like ! is used
         if (text.startsWith('!')) return res.status(200).send('Command ignored by price search');
 
         var isRateQ = ['rate','price','mrp','dlp','kitne ka','dam','rupay'].some(function(w){return lower.includes(w);});
@@ -687,7 +758,7 @@ module.exports = async function(req, res) {
         if (invMatches.length === 1) { var m2 = invMatches[0]; var f2 = m2.rows[0]; var prods2 = m2.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m2.invNo+'\n*Customer:* '+f2['Customer Name']+'\n*Products:* '+prods2+'\n*Total Value:* Rs.'+tG2.toFixed(2)+'\n*Total Volume:* '+vl2.toFixed(1)+' L\n*Date:* '+cleanDate(f2['Invoice Date'])+'\n*Payment:* '+f2['Mode Of Payement']); return res.status(200).json({status:'ok'}); }
         if (invMatches.length > 1) { var msg2 = '*Multiple invoices. Number reply karein:*\n\n'; invMatches.forEach(function(m,i){ msg2 += (i+1)+'. '+m.customer+' ('+m.invNo+')\n'; }); var pend2 = { type:'invoice', matches:invMatches, ts:Date.now() }; try { await database.ref('pending/'+safeFrom).set(pend2); } catch(e){} memoryPending[safeFrom] = pend2; await sendText(from, msg2); return res.status(200).json({status:'ok'}); }
 
-        // ── 3. SPECIFIC CUSTOMER SEARCH (FAST MATCH) ───────────────────
+        // ── 3. SPECIFIC CUSTOMER SEARCH ───────────────────
         var cMatches = searchCustomers(text, invoiceMap);
         var isCustQuery = ['bill', 'invoice', 'khata', 'hisab', 'data', 'report', 'ka', 'ki', 'batao'].some(function(w){return lower.includes(w);});
         
