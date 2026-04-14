@@ -191,87 +191,66 @@ function searchCustomers(query, invoiceMap) {
     return matches.slice(0, 5);
 }
 
+// ─── DYNAMIC LIMIT & DATE EXTRACTORS ───────────────────────────────────────
+function extractLimit(text) {
+    var m = text.match(/\b(\d{1,3})\b/);
+    return m ? parseInt(m[1]) : 5;
+}
+
+function getDateRangeFromText(text) {
+    var lower = text.toLowerCase();
+    var now = new Date();
+    var months = { jan:1, january:1, feb:2, february:2, mar:3, march:3, apr:4, april:4, may:5, jun:6, june:6, jul:7, july:7, aug:8, august:8, sep:9, september:9, oct:10, october:10, nov:11, november:11, dec:12, december:12 };
+    
+    for (var m in months) {
+        if (lower.indexOf(m) !== -1) {
+            var year = months[m] <= now.getMonth() + 1 ? now.getFullYear() : now.getFullYear() - 1;
+            return { from: new Date(year, months[m]-1, 1), to: new Date(year, months[m], 0, 23, 59, 59) };
+        }
+    }
+    if (lower.match(/\bis\s*month|this\s*month|mahine|is\s*mahine/)) return getDateRange('this_month');
+    if (lower.match(/\blast\s*month|pichle\s*mahine/)) return getDateRange('last_month');
+    if (lower.match(/\bis\s*week|this\s*week|is\s*hafte/)) return getDateRange('this_week');
+    if (lower.match(/\blast\s*week|pichle\s*hafte/)) return getDateRange('last_week');
+    if (lower.match(/\btoday|aaj/)) return getDateRange('today');
+    return null;
+}
+
 // ─── SMART QUERY DETECTOR ──────────────────────────────────────────────────
 function detectQueryIntent(text) {
     var lower = text.toLowerCase();
+    var dateRange = getDateRangeFromText(text);
+    var limit = extractLimit(text);
+    var lastOnly = lower.indexOf('last invoice') !== -1 || lower.indexOf('latest invoice') !== -1;
 
     var hasProductKeywords = ['activ','gtx','magnatec','edge','crb','rx','vecton','transmax','spheerol','radicool','power1','fork oil','brake fluid','grease'].some(function(w){return lower.indexOf(w)!==-1;});
     var hasCustomerKeywords = ['enterprises','service','center','motors','traders','dealers','wale','wali','ka','ki','ke','ne','liya'].some(function(w){return lower.indexOf(' '+w+' ')!==-1 || lower.indexOf(w+' ')===0;});
     
-    var hasThisMonth  = ['is month','this month','mahine','is mahine','current month','aaj ka mahina'].some(function(w){return lower.indexOf(w)!==-1;});
-    var hasLastMonth  = ['last month','pichle mahine','pichla mahina','previous month'].some(function(w){return lower.indexOf(w)!==-1;});
-    var hasThisWeek   = ['is hafte','this week','weekly','is week','current week','aaj ka hafte'].some(function(w){return lower.indexOf(w)!==-1;});
-    var hasLastWeek   = ['last week','pichle hafte','pichla hafte'].some(function(w){return lower.indexOf(w)!==-1;});
-    var hasToday      = ['aaj','today','aaj ke'].some(function(w){return lower.indexOf(w)!==-1;});
-    var hasAll        = ['all','saare','sab','poora','history','purana','pichla sab'].some(function(w){return lower.indexOf(w)!==-1;});
-    
-    var hasTop        = ['top','highest','sabse zyada','best','max','zyada bika','top 10','top 5'].some(function(w){return lower.indexOf(w)!==-1;});
-    var hasProduct    = ['product','item','maal','oil','lubricant'].some(function(w){return lower.indexOf(w)!==-1;});
+    var hasTop        = lower.indexOf('top') !== -1 || lower.indexOf('highest') !== -1 || lower.indexOf('sabse zyada') !== -1;
+    var hasProduct    = lower.indexOf('product') !== -1 || lower.indexOf('item') !== -1 || lower.indexOf('maal') !== -1;
     var hasExec       = ['executive','salesman','jagdish','daya','rakesh','gajanand','naresh'].some(function(w){return lower.indexOf(w)!==-1;});
-    var hasCustomer   = ['customer','ka','ki','ke','wale'].some(function(w){return lower.indexOf(' '+w+' ')!==-1 || lower.indexOf(w+' ')===0;});
-    var hasInvoice    = ['invoice','bill','inv'].some(function(w){return lower.indexOf(w)!==-1;});
-    var hasSummary    = ['summary','report','total','kitna','volume','sale','bika','hisab','liter','litre'].some(function(w){return lower.indexOf(w)!==-1;});
+    var hasCustomer   = ['customer','wale'].some(function(w){return lower.indexOf(' '+w+' ')!==-1;});
+    var hasInvoice    = lower.indexOf('invoice') !== -1 || lower.indexOf('bill') !== -1;
+    var hasSummary    = lower.indexOf('summary') !== -1 || lower.indexOf('report') !== -1 || lower.indexOf('kitna') !== -1 || lower.indexOf('volume') !== -1 || lower.indexOf('sale') !== -1 || lower.indexOf('hisab') !== -1 || lower.indexOf('liter') !== -1;
 
-    var dateFilter = 'all';
-    if (hasToday)     dateFilter = 'today';
-    else if (hasThisWeek)  dateFilter = 'this_week';
-    else if (hasLastWeek)  dateFilter = 'last_week';
-    else if (hasThisMonth) dateFilter = 'this_month';
-    else if (hasLastMonth) dateFilter = 'last_month';
-    else if (hasAll)       dateFilter = 'all';
-
-    if (hasTop && hasProduct && !hasCustomer) {
-        return { type: 'top_products', dateFilter: dateFilter };
-    }
-    
-    if (hasTop && !hasProduct) {
-        return { type: 'top_customers', dateFilter: dateFilter };
-    }
-    
-    if (hasExec) {
-        return { type: 'executive_report', dateFilter: dateFilter };
-    }
-
-    if (hasCustomerKeywords || (hasCustomer && !hasProduct) || (hasInvoice && !lower.match(/inv\/\d/i)) || hasSummary) {
-        return { type: 'customer_query', dateFilter: dateFilter };
-    }
-
-    if (hasProductKeywords) {
-        return { type: 'product_rate', dateFilter: 'all' };
-    }
-
-    // ✅ NEW: Analytics queries that should go to AI
-    if (hasSummary || hasTop || lower.indexOf('kitna') !== -1 || lower.indexOf('hisab') !== -1 || lower.indexOf('report') !== -1) {
-        return { type: 'ai_analytics', dateFilter: dateFilter };
-    }
-
-    return { type: 'general' };
+    if (hasTop && hasProduct && !hasCustomer) return { type: 'top_products', dateRange: dateRange, limit: limit };
+    if (hasTop && !hasProduct) return { type: 'top_customers', dateRange: dateRange, limit: limit };
+    if (hasExec) return { type: 'executive_report', dateRange: dateRange };
+    if (hasCustomerKeywords || (hasCustomer && !hasProduct) || (hasInvoice && !lower.match(/inv\/\d/i)) || hasSummary) return { type: 'customer_query', dateRange: dateRange, lastOnly: lastOnly };
+    if (hasProductKeywords) return { type: 'product_rate', dateRange: null };
+    if (hasSummary || hasTop || lower.indexOf('kitna') !== -1 || lower.indexOf('hisab') !== -1 || lower.indexOf('report') !== -1) return { type: 'ai_analytics', dateRange: dateRange, limit: limit };
+    return { type: 'general', dateRange: null, limit: 5 };
 }
 
 // ─── DATE FILTER FUNCTIONS ─────────────────────────────────────────────────
 function getDateRange(filter) {
     var now   = new Date();
     var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-    if (filter === 'today') {
-        return { from: today, to: new Date(today.getTime() + 86400000 - 1) };
-    }
-    if (filter === 'this_week') {
-        var day  = today.getDay();
-        var mon  = new Date(today); mon.setDate(today.getDate() - (day === 0 ? 6 : day - 1));
-        return { from: mon, to: new Date(mon.getTime() + 7 * 86400000 - 1) };
-    }
-    if (filter === 'last_week') {
-        var day2 = today.getDay();
-        var mon2 = new Date(today); mon2.setDate(today.getDate() - (day2 === 0 ? 6 : day2 - 1) - 7);
-        return { from: mon2, to: new Date(mon2.getTime() + 7 * 86400000 - 1) };
-    }
-    if (filter === 'this_month') {
-        return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59) };
-    }
-    if (filter === 'last_month') {
-        return { from: new Date(now.getFullYear(), now.getMonth() - 1, 1), to: new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59) };
-    }
+    if (filter === 'today') return { from: today, to: new Date(today.getTime() + 86400000 - 1) };
+    if (filter === 'this_week') { var day = today.getDay(); var mon = new Date(today); mon.setDate(today.getDate() - (day === 0 ? 6 : day - 1)); return { from: mon, to: new Date(mon.getTime() + 7 * 86400000 - 1) }; }
+    if (filter === 'last_week') { var day2 = today.getDay(); var mon2 = new Date(today); mon2.setDate(today.getDate() - (day2 === 0 ? 6 : day2 - 1) - 7); return { from: mon2, to: new Date(mon2.getTime() + 7 * 86400000 - 1) }; }
+    if (filter === 'this_month') return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59) };
+    if (filter === 'last_month') return { from: new Date(now.getFullYear(), now.getMonth() - 1, 1), to: new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59) };
     return null;
 }
 
@@ -282,23 +261,17 @@ function isInRange(dateVal, range) {
     return dt >= range.from && dt <= range.to;
 }
 
-// ─── CUSTOMER REPORT (with date filter) ────────────────────────────────────
-function getCustomerReport(custName, invoiceMap, dateFilter) {
-    var range = getDateRange(dateFilter);
+// ─── CUSTOMER REPORT (with date filter & lastOnly) ─────────────────────────
+function getCustomerReport(custName, invoiceMap, dateRange, lastOnly) {
     var filtered = [];
-
     for (var inv in invoiceMap) {
         var rows = invoiceMap[inv];
         if (rows[0]['Customer Name'] !== custName) continue;
-        if (range && !isInRange(rows[0]['Invoice Date'], range)) continue;
+        if (dateRange && !isInRange(rows[0]['Invoice Date'], dateRange)) continue;
         filtered.push({ inv: inv, rows: rows });
     }
-
-    if (filtered.length === 0) {
-        var label = dateFilter === 'all' ? 'koi bhi' : dateFilter.replace('_', ' ');
-        return custName + ' ke liye ' + label + ' period mein koi invoice nahi mila.';
-    }
-
+    if (filtered.length === 0) return custName + ' ke liye koi data nahi mila.';
+    
     filtered.sort(function(a,b){
         var da = getDateObj(a.rows[0]['Invoice Date']) || new Date(0);
         var db2 = getDateObj(b.rows[0]['Invoice Date']) || new Date(0);
@@ -306,173 +279,90 @@ function getCustomerReport(custName, invoiceMap, dateFilter) {
     });
 
     var totalVol = 0, totalVal = 0;
-    var periodLabel = dateFilter === 'all' ? 'All Time' : dateFilter.replace('_', ' ').replace(/\b\w/g, function(c){return c.toUpperCase();});
-    var msg = '*Customer: ' + custName + '*\n*Period: ' + periodLabel + '*\n\n';
+    var showList = lastOnly ? filtered.slice(0, 1) : filtered;
+    var msg = lastOnly ? '*Last Invoice Details:* ' + custName + '\n\n' : '*Customer: ' + custName + '*\n\n';
 
-    var showMax = Math.min(filtered.length, 10);
-    for (var i = 0; i < filtered.length; i++) {
-        var m   = filtered[i].rows;
-        var f   = m[0];
+    for (var i = 0; i < showList.length; i++) {
+        var m = showList[i].rows;
+        var f = m[0];
         var vol = m.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0);
         var val = m.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0);
         totalVol += vol; totalVal += val;
-        if (i < showMax) {
-            msg += 'Inv: ' + filtered[i].inv + ' | ' + cleanDate(f['Invoice Date']) + '\nProducts: ' + m.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(', ') + '\nVal: Rs.' + val.toFixed(2) + ' | Vol: ' + vol.toFixed(1) + 'L\n\n';
-        }
+        msg += 'Inv: ' + showList[i].inv + ' | ' + cleanDate(f['Invoice Date']) + '\nProducts: ' + m.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(', ') + '\nVal: Rs.' + val.toFixed(2) + ' | Vol: ' + vol.toFixed(1) + 'L\n\n';
     }
-    if (filtered.length > showMax) msg += '...aur ' + (filtered.length - showMax) + ' aur invoices.\n\n';
-    msg += '*Total Invoices: ' + filtered.length + '*\n*Total Volume: ' + totalVol.toFixed(1) + ' L*\n*Total Value: Rs.' + totalVal.toFixed(2) + '*';
+    if (filtered.length > showList.length) msg += '...aur ' + (filtered.length - showList.length) + ' aur invoices.\n\n';
+    msg += '*Total Volume: ' + totalVol.toFixed(1) + ' L*\n*Total Value: Rs.' + totalVal.toFixed(2) + '*';
     return msg;
 }
 
-// ─── TOP CUSTOMERS REPORT ──────────────────────────────────────────────────
-function getTopCustomers(invoiceMap, dateFilter, limit) {
-    limit = limit || 5;
-    var range   = getDateRange(dateFilter);
-    var custMap = {};
-
+// ─── TOP CUSTOMERS / PRODUCTS / EXECUTIVES ─────────────────────────────────
+function getTopCustomers(invoiceMap, dateRange, limit) {
+    limit = limit || 5; var custMap = {};
     for (var inv in invoiceMap) {
-        var rows  = invoiceMap[inv];
-        var cName = rows[0]['Customer Name'] || 'Unknown';
-        if (range && !isInRange(rows[0]['Invoice Date'], range)) continue;
+        var rows  = invoiceMap[inv]; var cName = rows[0]['Customer Name'] || 'Unknown';
+        if (dateRange && !isInRange(rows[0]['Invoice Date'], dateRange)) continue;
         if (!custMap[cName]) custMap[cName] = { vol: 0, val: 0, count: 0 };
-        rows.forEach(function(r){
-            custMap[cName].vol   += parseFloat(r['Product Volume']) || 0;
-            custMap[cName].val   += parseFloat(r['Total Value incl VAT/GST']) || 0;
-        });
+        rows.forEach(function(r){ custMap[cName].vol += parseFloat(r['Product Volume'])||0; custMap[cName].val += parseFloat(r['Total Value incl VAT/GST'])||0; });
         custMap[cName].count++;
     }
-
     var sorted = Object.keys(custMap).sort(function(a,b){ return custMap[b].vol - custMap[a].vol; }).slice(0, limit);
     if (sorted.length === 0) return 'Is period mein koi data nahi mila.';
-
-    var periodLabel = dateFilter === 'all' ? 'All Time' : dateFilter.replace('_',' ').replace(/\b\w/g,function(c){return c.toUpperCase();});
-    var msg = '*Top ' + limit + ' Customers by Volume (' + periodLabel + ')*\n\n';
-    sorted.forEach(function(name, i){
-        var s = custMap[name];
-        msg += (i+1) + '. ' + name + '\n   Vol: ' + s.vol.toFixed(1) + 'L | Val: Rs.' + s.val.toFixed(0) + ' | Bills: ' + s.count + '\n\n';
-    });
+    var msg = '*Top ' + limit + ' Customers by Volume*\n\n';
+    sorted.forEach(function(name, i){ var s = custMap[name]; msg += (i+1) + '. ' + name + '\n   Vol: ' + s.vol.toFixed(1) + 'L | Val: Rs.' + s.val.toFixed(0) + ' | Bills: ' + s.count + '\n\n'; });
     return msg;
 }
 
-// ─── ✅ TOP PRODUCTS REPORT (by volume sold) ───────────────────────────────
-function getTopProducts(allRows, dateFilter, limit) {
-    limit = limit || 5;
-    var range = getDateRange(dateFilter);
-    var prodMap = {};
-
+function getTopProducts(allRows, dateRange, limit) {
+    limit = limit || 5; var prodMap = {};
     for (var i = 0; i < allRows.length; i++) {
-        var r = allRows[i];
-        if (!r['Invoice No']) continue;
-        if (range && !isInRange(r['Invoice Date'], range)) continue;
-        
-        var prodName = (r['Product Name'] || 'Unknown').trim();
-        var vol = parseFloat(r['Product Volume']) || 0;
-        var val = parseFloat(r['Total Value incl VAT/GST']) || 0;
-        
+        var r = allRows[i]; if (!r['Invoice No']) continue;
+        if (dateRange && !isInRange(r['Invoice Date'], dateRange)) continue;
+        var prodName = (r['Product Name'] || 'Unknown').trim(); var vol = parseFloat(r['Product Volume']) || 0; var val = parseFloat(r['Total Value incl VAT/GST']) || 0;
         if (!prodMap[prodName]) prodMap[prodName] = { vol: 0, val: 0, count: 0 };
-        prodMap[prodName].vol += vol;
-        prodMap[prodName].val += val;
-        prodMap[prodName].count++;
+        prodMap[prodName].vol += vol; prodMap[prodName].val += val; prodMap[prodName].count++;
     }
-
     var sorted = Object.keys(prodMap).sort(function(a,b){ return prodMap[b].vol - prodMap[a].vol; }).slice(0, limit);
     if (sorted.length === 0) return 'Is period mein koi product data nahi mila.';
-
-    var periodLabel = dateFilter === 'all' ? 'All Time' : dateFilter.replace('_',' ').replace(/\b\w/g,function(c){return c.toUpperCase();});
-    var msg = '*Top ' + limit + ' Products by Volume Sold (' + periodLabel + ')*\n\n';
-    sorted.forEach(function(name, i){
-        var s = prodMap[name];
-        msg += (i+1) + '. ' + name + '\n   Vol: ' + s.vol.toFixed(1) + 'L | Val: Rs.' + s.val.toFixed(0) + ' | Times Sold: ' + s.count + '\n\n';
-    });
+    var msg = '*Top ' + limit + ' Products by Volume Sold*\n\n';
+    sorted.forEach(function(name, i){ var s = prodMap[name]; msg += (i+1) + '. ' + name + '\n   Vol: ' + s.vol.toFixed(1) + 'L | Val: Rs.' + s.val.toFixed(0) + ' | Times Sold: ' + s.count + '\n\n'; });
     return msg;
 }
 
-// ─── EXECUTIVE REPORT ──────────────────────────────────────────────────────
-function getExecutiveReport(invoiceMap, dateFilter) {
-    var range   = getDateRange(dateFilter);
+function getExecutiveReport(invoiceMap, dateRange) {
     var execMap = {};
-
     for (var inv in invoiceMap) {
         var rows = invoiceMap[inv];
-        if (range && !isInRange(rows[0]['Invoice Date'], range)) continue;
+        if (dateRange && !isInRange(rows[0]['Invoice Date'], dateRange)) continue;
         var exec = rows[0]['Sales Executive Name'] || 'Unknown';
         if (!execMap[exec]) execMap[exec] = { vol: 0, val: 0, count: 0 };
-        rows.forEach(function(r){
-            execMap[exec].vol += parseFloat(r['Product Volume']) || 0;
-            execMap[exec].val += parseFloat(r['Total Value incl VAT/GST']) || 0;
-        });
+        rows.forEach(function(r){ execMap[exec].vol += parseFloat(r['Product Volume'])||0; execMap[exec].val += parseFloat(r['Total Value incl VAT/GST'])||0; });
         execMap[exec].count++;
     }
-
     if (Object.keys(execMap).length === 0) return 'Is period mein koi data nahi.';
-    var periodLabel = dateFilter === 'all' ? 'All Time' : dateFilter.replace('_',' ').replace(/\b\w/g,function(c){return c.toUpperCase();});
-    var msg = '*Sales Executive Report (' + periodLabel + ')*\n\n';
-    Object.keys(execMap).sort(function(a,b){return execMap[b].vol - execMap[a].vol;}).forEach(function(exec){
-        var s = execMap[exec];
-        msg += '*' + exec + '*\n   Vol: ' + s.vol.toFixed(1) + 'L | Val: Rs.' + s.val.toFixed(0) + ' | Bills: ' + s.count + '\n\n';
-    });
+    var msg = '*Sales Executive Report*\n\n';
+    Object.keys(execMap).sort(function(a,b){return execMap[b].vol - execMap[a].vol;}).forEach(function(exec){ var s = execMap[exec]; msg += '*' + exec + '*\n   Vol: ' + s.vol.toFixed(1) + 'L | Val: Rs.' + s.val.toFixed(0) + ' | Bills: ' + s.count + '\n\n'; });
     return msg;
 }
 
-// ─── DATE-WISE INVOICE SUMMARY ─────────────────────────────────────────────
-function getDateWiseSummary(invoiceMap, dateFilter) {
-    var range = getDateRange(dateFilter);
+function getDateWiseSummary(invoiceMap, dateRange) {
     var found = [];
-    for (var inv in invoiceMap) {
-        var rows = invoiceMap[inv];
-        if (range && !isInRange(rows[0]['Invoice Date'], range)) continue;
-        var vol = rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0);
-        var val = rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0);
-        found.push({ inv: inv, customer: rows[0]['Customer Name'], date: cleanDate(rows[0]['Invoice Date']), vol: vol, val: val });
-    }
+    for (var inv in invoiceMap) { var rows = invoiceMap[inv]; if (dateRange && !isInRange(rows[0]['Invoice Date'], dateRange)) continue; var vol = rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); var val = rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); found.push({ inv: inv, customer: rows[0]['Customer Name'], date: cleanDate(rows[0]['Invoice Date']), vol: vol, val: val }); }
     if (found.length === 0) return 'Is period mein koi invoice nahi mila.';
-    var periodLabel = dateFilter === 'all' ? '' : ' (' + dateFilter.replace('_',' ') + ')';
-    var msg = '*Invoices' + periodLabel + '*\n\n';
-    found.slice(0, 15).forEach(function(f){
-        msg += f.inv + ' | ' + f.customer.split(',')[0] + '\n' + f.date + ' | Vol: ' + f.vol.toFixed(1) + 'L | Rs.' + f.val.toFixed(0) + '\n\n';
-    });
-    if (found.length > 15) msg += '...aur ' + (found.length - 15) + ' aur hain.\n';
-    var tv = found.reduce(function(s,f){return s+f.vol;},0);
-    var tval = found.reduce(function(s,f){return s+f.val;},0);
-    msg += '\n*Total: ' + found.length + ' invoices | ' + tv.toFixed(1) + 'L | Rs.' + tval.toFixed(0) + '*';
-    return msg;
+    var msg = '*Invoices*\n\n'; found.slice(0, 15).forEach(function(f){ msg += f.inv + ' | ' + f.customer.split(',')[0] + '\n' + f.date + ' | Vol: ' + f.vol.toFixed(1) + 'L | Rs.' + f.val.toFixed(0) + '\n\n'; });
+    if (found.length > 15) msg += '...aur ' + (found.length - 15) + ' aur hain.\n'; var tv = found.reduce(function(s,f){return s+f.vol;},0); var tval = found.reduce(function(s,f){return s+f.val;},0);
+    msg += '\n*Total: ' + found.length + ' invoices | ' + tv.toFixed(1) + 'L | Rs.' + tval.toFixed(0) + '*'; return msg;
 }
 
-// ─── ✅ STRUCTURED DATA FOR AI (Constrained Context) ───────────────────────
+// ─── STRUCTURED DATA FOR AI ────────────────────────────────────────────────
 function generateAIContext(allRows, invoiceMap, mrpMap, dlpMap, query) {
     var context = '[INVOICE DATA - Use ONLY for customer/volume queries]\n';
-    
-    // Sample recent invoices (max 50 to stay within token limit)
     var sampleInvoices = Object.keys(invoiceMap).slice(0, 50);
-    sampleInvoices.forEach(function(invNo) {
-        var rows = invoiceMap[invNo];
-        if (!rows || rows.length === 0) return;
-        var f = rows[0];
-        var vol = rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0);
-        var val = rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0);
-        context += 'INV:'+invNo+'|CUST:'+f['Customer Name']+'|DATE:'+cleanDate(f['Invoice Date'])+'|VOL:'+vol.toFixed(1)+'L|VAL:Rs.'+val.toFixed(0)+'\n';
-    });
-    
+    sampleInvoices.forEach(function(invNo) { var rows = invoiceMap[invNo]; if (!rows || rows.length === 0) return; var f = rows[0]; var vol = rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); var val = rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); context += 'INV:'+invNo+'|CUST:'+f['Customer Name']+'|DATE:'+cleanDate(f['Invoice Date'])+'|VOL:'+vol.toFixed(1)+'L|VAL:Rs.'+val.toFixed(0)+'\n'; });
     context += '\n[PRODUCT PRICES - Use ONLY for MRP/DLP queries]\n';
     var sampleProducts = Object.keys(mrpMap).slice(0, 30);
-    sampleProducts.forEach(function(name) {
-        if (mrpMap[name] && dlpMap[name]) {
-            var sizes = Object.keys(mrpMap[name]).slice(0, 5);
-            sizes.forEach(function(sz) {
-                context += 'PROD:'+name+'|SIZE:'+sz+'|MRP:Rs.'+mrpMap[name][sz]+'|DLP:Rs.'+(dlpMap[name][sz]||'N/A')+'\n';
-            });
-        }
-    });
-    
-    context += '\n[QUERY INSTRUCTIONS]\n';
-    context += '- Sirf upar diye gaye DATA se jawab do.\n';
-    context += '- Agar data me answer nahi milta to exactly likho: "Please wait, admin will reply soon."\n';
-    context += '- Kuch bhi invent mat karo, guess mat karo, assume mat karo.\n';
-    context += '- 0.9L = 900ml (ye same hain).\n';
-    context += '- Format: *Heading:* Value\n*Total:* Rs.X\n- Hinglish me jawab do.\n';
-    
-    return context.slice(0, 18000); // Stay within token limits
+    sampleProducts.forEach(function(name) { if (mrpMap[name] && dlpMap[name]) { var sizes = Object.keys(mrpMap[name]).slice(0, 5); sizes.forEach(function(sz) { context += 'PROD:'+name+'|SIZE:'+sz+'|MRP:Rs.'+mrpMap[name][sz]+'|DLP:Rs.'+(dlpMap[name][sz]||'N/A')+'\n'; }); } });
+    context += '\n[QUERY INSTRUCTIONS]\n- Sirf upar diye gaye DATA se jawab do.\n- Agar data me answer nahi milta to exactly likho: "Please wait, admin will reply soon."\n- Kuch bhi invent mat karo, guess mat karo, assume mat karo.\n- 0.9L = 900ml (ye same hain).\n- Format: *Heading:* Value\n*Total:* Rs.X\n- Hinglish me jawab do.\n';
+    return context.slice(0, 18000);
 }
 
 // ─── LOAD ALL DATA ─────────────────────────────────────────────────────────
@@ -481,84 +371,39 @@ async function loadAllData() {
     var base = process.env.GITHUB_RAW_BASE;
     if (!base) return null;
     var fileList = []; try { fileList = (await axios.get(base+'/index.json')).data; } catch(e){ return null; }
-
     var excelFiles = fileList.filter(function(f){ return f.match(/\.(xlsx|xls|csv)$/i) && !f.toLowerCase().includes('mrp') && !f.toLowerCase().includes('dlp') && !f.toLowerCase().includes('list'); });
     var allRows = [];
-    for (var k = 0; k < excelFiles.length; k++) {
-        try { var res = await axios.get(base+'/'+encodeURIComponent(excelFiles[k]),{responseType:'arraybuffer'}); var wb = XLSX.read(res.data,{type:'buffer'}); for (var s = 0; s < wb.SheetNames.length; s++) { allRows = allRows.concat(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[s]],{defval:''})); } } catch(e){}
-    }
+    for (var k = 0; k < excelFiles.length; k++) { try { var res = await axios.get(base+'/'+encodeURIComponent(excelFiles[k]),{responseType:'arraybuffer'}); var wb = XLSX.read(res.data,{type:'buffer'}); for (var s = 0; s < wb.SheetNames.length; s++) { allRows = allRows.concat(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[s]],{defval:''})); } } catch(e){} }
     var invoiceMap = {};
     for (var m = 0; m < allRows.length; m++) { var inv = allRows[m]['Invoice No']||''; if(inv){if(!invoiceMap[inv])invoiceMap[inv]=[];invoiceMap[inv].push(allRows[m]);} }
-
     var mrpFile = fileList.find(function(f){ return f.toLowerCase().includes('mrp') && f.match(/\.(xlsx|xls)$/i); });
-    var mrpMap  = {};
-    if (mrpFile) { try { var r2 = await axios.get(base+'/'+encodeURIComponent(mrpFile),{responseType:'arraybuffer'}); mrpMap = loadPriceListFromExcel(XLSX.read(r2.data,{type:'buffer'})); } catch(e){} }
-
+    var mrpMap  = {}; if (mrpFile) { try { var r2 = await axios.get(base+'/'+encodeURIComponent(mrpFile),{responseType:'arraybuffer'}); mrpMap = loadPriceListFromExcel(XLSX.read(r2.data,{type:'buffer'})); } catch(e){} }
     var dlpFile = fileList.find(function(f){ return (f.toLowerCase().includes('dlp')||f.toLowerCase().includes('list')) && !f.toLowerCase().includes('mrp') && f.match(/\.(xlsx|xls)$/i); });
-    var dlpMap  = {};
-    if (dlpFile) { try { var r3 = await axios.get(base+'/'+encodeURIComponent(dlpFile),{responseType:'arraybuffer'}); dlpMap = loadPriceListFromExcel(XLSX.read(r3.data,{type:'buffer'})); } catch(e){} }
-
+    var dlpMap  = {}; if (dlpFile) { try { var r3 = await axios.get(base+'/'+encodeURIComponent(dlpFile),{responseType:'arraybuffer'}); dlpMap = loadPriceListFromExcel(XLSX.read(r3.data,{type:'buffer'})); } catch(e){} }
     var mrpPdfFile  = fileList.find(function(f){ return f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); });
     var listPdfFile = fileList.find(function(f){ return (f.toLowerCase().includes('list')||f.toLowerCase().includes('dlp')) && !f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); });
     var mrpPdfUrl   = mrpPdfFile  ? base+'/'+encodeURIComponent(mrpPdfFile)  : '';
     var listPdfUrl  = listPdfFile ? base+'/'+encodeURIComponent(listPdfFile) : '';
-
-    globalCache = {
-        invoiceMap:     invoiceMap,
-        allRows:        allRows,
-        mrpMap:         mrpMap,
-        dlpMap:         dlpMap,
-        mrpFile:        mrpFile,
-        dlpFile:        dlpFile,
-        mrpPdfUrl:      mrpPdfUrl,
-        listPdfUrl:     listPdfUrl,
-        mrpPdfFile:     mrpPdfFile,
-        listPdfFile:    listPdfFile,
-    };
+    globalCache = { invoiceMap: invoiceMap, allRows: allRows, mrpMap: mrpMap, dlpMap: dlpMap, mrpFile: mrpFile, dlpFile: dlpFile, mrpPdfUrl: mrpPdfUrl, listPdfUrl: listPdfUrl, mrpPdfFile: mrpPdfFile, listPdfFile: listPdfFile };
     lastCacheTime = Date.now();
     console.log('[CACHE] Invoices:'+Object.keys(invoiceMap).length+' MRP:'+Object.keys(mrpMap).length+' DLP:'+Object.keys(dlpMap).length);
     return globalCache;
 }
 
-// ─── AI REPLY (With Strict Constraints) ────────────────────────────────────
+// ─── AI REPLY ──────────────────────────────────────────────────────────────
 async function getAIReply(userMsg, contextData, prompt) {
     var key = process.env.NVIDIA_API_KEY; if (!key) return null;
     try {
-        var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', {
-            model: 'meta/llama-3.1-70b-instruct',
-            messages: [
-                { role: 'system', content: prompt },
-                { role: 'user', content: 'CONTEXT DATA:\n' + contextData + '\n\nUSER QUERY: ' + userMsg }
-            ],
-            max_tokens: 800,
-            temperature: 0.1
-        }, { 
-            headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, 
-            timeout: 30000 
-        });
+        var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', { model: 'meta/llama-3.1-70b-instruct', messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'CONTEXT DATA:\n' + contextData + '\n\nUSER QUERY: ' + userMsg }], max_tokens: 800, temperature: 0.1 }, { headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 30000 });
         var reply = res.data.choices[0].message.content;
-        // ✅ Double-check: If reply doesn't contain data-based answer, fallback
-        if (!reply || reply.toLowerCase().includes('cannot') || reply.toLowerCase().includes('not found') || reply.toLowerCase().includes('admin will reply')) {
-            return null;
-        }
+        if (!reply || reply.toLowerCase().includes('cannot') || reply.toLowerCase().includes('not found') || reply.toLowerCase().includes('admin will reply')) return null;
         return sanitizeReply(reply);
-    } catch (e) { 
-        console.error('[AI] Error:', e.message);
-        return null; 
-    }
+    } catch (e) { console.error('[AI] Error:', e.message); return null; }
 }
 
 // ─── SEND ──────────────────────────────────────────────────────────────────
-async function sendText(to, text) {
-    var base = (process.env.EVOLUTION_API_URL||'').replace(/\/$/,''); var inst = process.env.EVOLUTION_INSTANCE; var key = process.env.EVOLUTION_API_KEY; var num = to.replace(/@s\.whatsapp\.net$/,'').replace(/@g\.us$/,'');
-    if (!base||!inst||!key) return;
-    try { await axios.post(base+'/message/sendText/'+inst,{number:num,text:text},{headers:{'Content-Type':'application/json','apikey':key}}); } catch(e){}
-}
-async function sendDocument(to, fileUrl, fileName, caption) {
-    var base = (process.env.EVOLUTION_API_URL||'').replace(/\/$/,''); var inst = process.env.EVOLUTION_INSTANCE; var key = process.env.EVOLUTION_API_KEY; var num = to.replace(/@s\.whatsapp\.net$/,'').replace(/@g\.us$/,'');
-    if (!base||!inst||!key) return;
-    try { await axios.post(base+'/message/sendMedia/'+inst,{number:num,mediatype:'document',mimetype:'application/pdf',media:fileUrl,fileName:fileName,caption:caption||''},{headers:{'Content-Type':'application/json','apikey':key}}); } catch(e){}
-}
+async function sendText(to, text) { var base = (process.env.EVOLUTION_API_URL||'').replace(/\/$/,''); var inst = process.env.EVOLUTION_INSTANCE; var key = process.env.EVOLUTION_API_KEY; var num = to.replace(/@s\.whatsapp\.net$/,'').replace(/@g\.us$/,''); if (!base||!inst||!key) return; try { await axios.post(base+'/message/sendText/'+inst,{number:num,text:text},{headers:{'Content-Type':'application/json','apikey':key}}); } catch(e){} }
+async function sendDocument(to, fileUrl, fileName, caption) { var base = (process.env.EVOLUTION_API_URL||'').replace(/\/$/,''); var inst = process.env.EVOLUTION_INSTANCE; var key = process.env.EVOLUTION_API_KEY; var num = to.replace(/@s\.whatsapp\.net$/,'').replace(/@g\.us$/,''); if (!base||!inst||!key) return; try { await axios.post(base+'/message/sendMedia/'+inst,{number:num,mediatype:'document',mimetype:'application/pdf',media:fileUrl,fileName:fileName,caption:caption||''},{headers:{'Content-Type':'application/json','apikey':key}}); } catch(e){} }
 
 // ─── MAIN WEBHOOK ──────────────────────────────────────────────────────────
 module.exports = async function(req, res) {
@@ -578,7 +423,6 @@ module.exports = async function(req, res) {
 
         var results = await Promise.all([getSystemPrompt(), loadAllData(), getPDFList()]);
         var sysPrompt = results[0]; var dataResult = results[1]||{}; var savedPDFs = results[2];
-
         var invoiceMap = dataResult.invoiceMap || {};
         var mrpMap     = dataResult.mrpMap     || {};
         var dlpMap     = dataResult.dlpMap     || {};
@@ -589,32 +433,15 @@ module.exports = async function(req, res) {
             var pending = null;
             if (database) { try { var snap = await database.ref('pending/'+safeFrom).get(); if(snap.exists()) pending = snap.val(); } catch(e){} }
             if (!pending && memoryPending[safeFrom]) pending = memoryPending[safeFrom];
-
             if (pending && pending.matches) {
                 var idx = parseInt(text) - 1;
                 if (pending.matches[idx]) {
-                    if (pending.type === 'invoice') {
-                        var m = pending.matches[idx]; var f = m.rows[0];
-                        var prods = m.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + ');
-                        var tG = m.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0);
-                        var vl = m.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0);
-                        await sendText(from, '*Invoice:* '+m.invNo+'\n*Customer:* '+f['Customer Name']+'\n*Products:* '+prods+'\n*Total Value:* Rs.'+tG.toFixed(2)+'\n*Total Volume:* '+vl.toFixed(1)+' L\n*Date:* '+cleanDate(f['Invoice Date'])+'\n*Payment:* '+f['Mode Of Payement']);
-                    } else if (pending.type === 'product') {
-                        var p = pending.matches[idx];
-                        var aiReply = await getAIReply('User ORIGINAL query: "'+pending.originalQuery+'". Selected: '+p.name+'. Give exact MRP and DLP for the SPECIFIC SIZE asked. 0.9L=900ml.', '[PRICE DATA]\n'+p.chunk, sysPrompt);
-                        await sendText(from, aiReply || 'Data nahi mila.');
-                    } else if (pending.type === 'customer_report') {
-                        var report = getCustomerReport(pending.matches[idx].name, invoiceMap, pending.dateFilter || 'all');
-                        await sendText(from, report);
-                    } else if (pending.type === 'customer_select') {
-                        var report2 = getCustomerReport(pending.matches[idx].name, invoiceMap, pending.dateFilter || 'all');
-                        await sendText(from, report2);
-                    }
+                    if (pending.type === 'invoice') { var m = pending.matches[idx]; var f = m.rows[0]; var prods = m.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG = m.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl = m.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m.invNo+'\n*Customer:* '+f['Customer Name']+'\n*Products:* '+prods+'\n*Total Value:* Rs.'+tG.toFixed(2)+'\n*Total Volume:* '+vl.toFixed(1)+' L\n*Date:* '+cleanDate(f['Invoice Date'])+'\n*Payment:* '+f['Mode Of Payement']); } 
+                    else if (pending.type === 'product') { var p = pending.matches[idx]; var aiReply = await getAIReply('User ORIGINAL query: "'+pending.originalQuery+'". Selected: '+p.name+'. Give exact MRP and DLP for the SPECIFIC SIZE asked. 0.9L=900ml.', '[PRICE DATA]\n'+p.chunk, sysPrompt); await sendText(from, aiReply || 'Data nahi mila.'); } 
+                    else if (pending.type === 'customer_select') { var custName = pending.matches[idx].name; var report = getCustomerReport(custName, invoiceMap, pending.dateRange, pending.lastOnly); await sendText(from, report); }
                     if (database) try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
                     delete memoryPending[safeFrom];
-                } else {
-                    await sendText(from, 'Galat number. 1 se '+pending.matches.length+' ke beech chunein.');
-                }
+                } else { await sendText(from, 'Galat number. 1 se '+pending.matches.length+' ke beech chunein.'); }
                 return res.status(200).json({ status: 'ok' });
             }
         }
@@ -623,22 +450,14 @@ module.exports = async function(req, res) {
         if (isAdmin && text.indexOf('!setprompt ') === 0)  { await saveSystemPrompt(text.slice(11).trim()); await sendText(from, 'Prompt update ho gaya!'); return res.status(200).json({ status: 'ok' }); }
         if (isAdmin && text === '!status')  { await sendText(from, '*Bot Status*\nOnline\nInvoices: '+Object.keys(invoiceMap).length+'\nMRP: '+Object.keys(mrpMap).length+'\nDLP: '+Object.keys(dlpMap).length); return res.status(200).json({ status: 'ok' }); }
         if (isAdmin && text === '!clearcache') { globalCache = null; await sendText(from, 'Cache cleared!'); return res.status(200).json({ status: 'ok' }); }
-        if (isAdmin && text.indexOf('!addpdf ') === 0) {
-            var parts = text.slice(8).split('|').map(function(s){return s.trim();});
-            if (parts.length === 3) { var lst = await getPDFList(); lst[parts[0].toLowerCase()] = {name:parts[1],url:parts[2]}; await savePDFList(lst); await sendText(from, 'PDF added: '+parts[1]); }
-            else await sendText(from, 'Format: !addpdf keyword | Name | URL');
-            return res.status(200).json({ status: 'ok' });
-        }
+        if (isAdmin && text.indexOf('!addpdf ') === 0) { var parts = text.slice(8).split('|').map(function(s){return s.trim();}); if (parts.length === 3) { var lst = await getPDFList(); lst[parts[0].toLowerCase()] = {name:parts[1],url:parts[2]}; await savePDFList(lst); await sendText(from, 'PDF added: '+parts[1]); } else await sendText(from, 'Format: !addpdf keyword | Name | URL'); return res.status(200).json({ status: 'ok' }); }
         if (isAdmin && text === '!listpdf') { var pl = await getPDFList(); await sendText(from, Object.keys(pl).length ? Object.entries(pl).map(function(e){return e[1].name+' ['+e[0]+']';}).join('\n') : 'No PDFs saved.'); return res.status(200).json({ status: 'ok' }); }
         if (isAdmin && text.indexOf('!removepdf ') === 0) { var kw = text.slice(11).trim().toLowerCase(); var pl2 = await getPDFList(); if(pl2[kw]){delete pl2[kw]; await savePDFList(pl2); await sendText(from,'Removed: '+kw);} else await sendText(from,'Not found: '+kw); return res.status(200).json({ status: 'ok' }); }
         if (isAdmin && text === '!help') { await sendText(from, '*Admin Commands:*\n!status\n!setprompt [text]\n!clearcache\n!addpdf keyword|Name|URL\n!listpdf\n!removepdf keyword'); return res.status(200).json({ status: 'ok' }); }
 
         // ── GREETING (Krish name) ─────────────────────────────────────────
         var lower = text.toLowerCase();
-        if (['hi','hello','namaste','hey','hii','good morning','kaise ho','helo'].some(function(g){return lower===g||lower.startsWith(g+' ');})) {
-            await sendText(from, 'Hello! Main Krish hoon, Shri Laxmi Auto Store ki assistant.\nInvoice details, MRP/DLP rates, customer reports pooch sakte hain!');
-            return res.status(200).json({ status: 'ok' });
-        }
+        if (['hi','hello','namaste','hey','hii','good morning','kaise ho','helo'].some(function(g){return lower===g||lower.startsWith(g+' ');})) { await sendText(from, 'Hello! Main Krish hoon, Shri Laxmi Auto Store ki assistant.\nInvoice details, MRP/DLP rates, customer reports pooch sakte hain!'); return res.status(200).json({ status: 'ok' }); }
 
         // ── PDF SEND REQUEST ──────────────────────────────────────────────
         var hasSend = ['send','bhejo','share','bhej','de do','chahiye','pdf'].some(function(w){return lower.includes(w);});
@@ -648,124 +467,51 @@ module.exports = async function(req, res) {
         if (hasSend && hasDLP  && dataResult.listPdfUrl) { await sendDocument(from, dataResult.listPdfUrl, dataResult.listPdfFile, dataResult.listPdfFile); return res.status(200).json({status:'ok'}); }
         for (var k in savedPDFs) { if (lower.includes(k) && hasSend) { await sendDocument(from, savedPDFs[k].url, savedPDFs[k].name, savedPDFs[k].name); return res.status(200).json({status:'ok'}); } }
 
-        // ── PRODUCT RATE QUERY (Code-based, fast) ─────────────────────────
+        // ── PRODUCT RATE QUERY ────────────────────────────────────────────
         var prodMatches = searchProducts(text, mrpMap, dlpMap);
         var invMatches  = searchInvoices(text, invoiceMap);
         var isRateQ     = ['rate','price','mrp','dlp','kitne ka','dam','rupay'].some(function(w){return lower.includes(w);});
 
         if (isRateQ || (prodMatches.length > 0 && invMatches.length === 0)) {
             if (prodMatches.length === 0) { await sendText(from, 'Please wait, admin will reply soon.'); return res.status(200).json({status:'ok'}); }
-            if (prodMatches.length === 1) {
-                var aiR = await getAIReply('Query: '+text+'\nGive exact MRP and DLP for the size mentioned. 0.9L=900ml.', '[PRICE DATA]\n'+prodMatches[0].chunk, sysPrompt);
-                await sendText(from, aiR || 'Data nahi mila.');
-                return res.status(200).json({status:'ok'});
-            }
-            var msg = '*Kaunsa product? Number reply karein:*\n\n';
-            prodMatches.forEach(function(p,i){ msg += (i+1)+'. '+p.name+'\n'; });
-            var pend = { type:'product', matches:prodMatches, originalQuery:text, ts:Date.now() };
-            if (database) try { await database.ref('pending/'+safeFrom).set(pend); } catch(e){}
-            memoryPending[safeFrom] = pend;
-            await sendText(from, msg);
-            return res.status(200).json({status:'ok'});
+            if (prodMatches.length === 1) { var aiR = await getAIReply('Query: '+text+'\nGive exact MRP and DLP for the size mentioned. 0.9L=900ml.', '[PRICE DATA]\n'+prodMatches[0].chunk, sysPrompt); await sendText(from, aiR || 'Data nahi mila.'); return res.status(200).json({status:'ok'}); }
+            var msg = '*Kaunsa product? Number reply karein:*\n\n'; prodMatches.forEach(function(p,i){ msg += (i+1)+'. '+p.name+'\n'; }); var pend = { type:'product', matches:prodMatches, originalQuery:text, ts:Date.now() }; if (database) try { await database.ref('pending/'+safeFrom).set(pend); } catch(e){} memoryPending[safeFrom] = pend; await sendText(from, msg); return res.status(200).json({status:'ok'});
         }
 
-        // ── INVOICE SEARCH (Code-based, fast) ─────────────────────────────
-        if (invMatches.length === 1) {
-            var m2 = invMatches[0]; var f2 = m2.rows[0];
-            var prods2 = m2.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + ');
-            var tG2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0);
-            var vl2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0);
-            await sendText(from, '*Invoice:* '+m2.invNo+'\n*Customer:* '+f2['Customer Name']+'\n*Products:* '+prods2+'\n*Total Value:* Rs.'+tG2.toFixed(2)+'\n*Total Volume:* '+vl2.toFixed(1)+' L\n*Date:* '+cleanDate(f2['Invoice Date'])+'\n*Payment:* '+f2['Mode Of Payement']);
-            return res.status(200).json({status:'ok'});
-        }
-        if (invMatches.length > 1) {
-            var msg2 = '*Multiple invoices. Number reply karein:*\n\n';
-            invMatches.forEach(function(m,i){ msg2 += (i+1)+'. '+m.customer+' ('+m.invNo+')\n'; });
-            var pend2 = { type:'invoice', matches:invMatches, ts:Date.now() };
-            if (database) try { await database.ref('pending/'+safeFrom).set(pend2); } catch(e){}
-            memoryPending[safeFrom] = pend2;
-            await sendText(from, msg2);
-            return res.status(200).json({status:'ok'});
-        }
+        // ── INVOICE SEARCH ────────────────────────────────────────────────
+        if (invMatches.length === 1) { var m2 = invMatches[0]; var f2 = m2.rows[0]; var prods2 = m2.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m2.invNo+'\n*Customer:* '+f2['Customer Name']+'\n*Products:* '+prods2+'\n*Total Value:* Rs.'+tG2.toFixed(2)+'\n*Total Volume:* '+vl2.toFixed(1)+' L\n*Date:* '+cleanDate(f2['Invoice Date'])+'\n*Payment:* '+f2['Mode Of Payement']); return res.status(200).json({status:'ok'}); }
+        if (invMatches.length > 1) { var msg2 = '*Multiple invoices. Number reply karein:*\n\n'; invMatches.forEach(function(m,i){ msg2 += (i+1)+'. '+m.customer+' ('+m.invNo+')\n'; }); var pend2 = { type:'invoice', matches:invMatches, ts:Date.now() }; if (database) try { await database.ref('pending/'+safeFrom).set(pend2); } catch(e){} memoryPending[safeFrom] = pend2; await sendText(from, msg2); return res.status(200).json({status:'ok'}); }
 
         // ── ✅ SMART QUERY HANDLING ───────────────────────────────────────
         var qIntent = detectQueryIntent(text);
-        console.log('[INTENT] type:'+qIntent.type+' dateFilter:'+qIntent.dateFilter+' query:'+text);
+        console.log('[INTENT] type:'+qIntent.type+' query:'+text);
 
-        // ✅ TOP PRODUCTS (Code-based)
-        if (qIntent.type === 'top_products') {
-            var topProdReport = getTopProducts(allRows, qIntent.dateFilter, 10); // User asked for top 10
-            await sendText(from, topProdReport);
-            return res.status(200).json({status:'ok'});
-        }
+        if (qIntent.type === 'top_products') { await sendText(from, getTopProducts(allRows, qIntent.dateRange, qIntent.limit)); return res.status(200).json({status:'ok'}); }
+        if (qIntent.type === 'top_customers') { await sendText(from, getTopCustomers(invoiceMap, qIntent.dateRange, qIntent.limit)); return res.status(200).json({status:'ok'}); }
+        if (qIntent.type === 'executive_report') { await sendText(from, getExecutiveReport(invoiceMap, qIntent.dateRange)); return res.status(200).json({status:'ok'}); }
 
-        // ✅ TOP CUSTOMERS (Code-based)
-        if (qIntent.type === 'top_customers') {
-            var topCustReport = getTopCustomers(invoiceMap, qIntent.dateFilter, 10);
-            await sendText(from, topCustReport);
-            return res.status(200).json({status:'ok'});
-        }
-
-        // ✅ EXECUTIVE REPORT (Code-based)
-        if (qIntent.type === 'executive_report') {
-            var execReport = getExecutiveReport(invoiceMap, qIntent.dateFilter);
-            await sendText(from, execReport);
-            return res.status(200).json({status:'ok'});
-        }
-
-        // ✅ CUSTOMER-SPECIFIC QUERIES (Code-based + AI fallback)
         if (qIntent.type === 'customer_query') {
             var cMatches = searchCustomers(text, invoiceMap);
-
-            if (cMatches.length === 0) {
-                if (qIntent.dateFilter !== 'all') {
-                    var dateSummary = getDateWiseSummary(invoiceMap, qIntent.dateFilter);
-                    await sendText(from, dateSummary);
-                    return res.status(200).json({status:'ok'});
-                }
-                // ✅ FALLBACK TO AI for complex customer analytics
-                var aiContext = generateAIContext(allRows, invoiceMap, mrpMap, dlpMap, text);
-                var aiAnswer = await getAIReply(text, aiContext, sysPrompt);
-                if (aiAnswer) {
-                    await sendText(from, aiAnswer);
-                } else {
-                    await sendText(from, 'Please wait, admin will reply soon.');
-                }
-                return res.status(200).json({status:'ok'});
-            }
-
+            if (cMatches.length === 0) { if (qIntent.dateRange) { await sendText(from, getDateWiseSummary(invoiceMap, qIntent.dateRange)); } else { await sendText(from, 'Please wait, admin will reply soon.'); } return res.status(200).json({status:'ok'}); }
             if (cMatches.length > 1) {
-                var cMsg = '*Multiple customers found. Kaunsa customer? Number reply karein:*\n\n';
-                cMatches.forEach(function(c,i){ cMsg += (i+1)+'. '+c.name+'\n'; });
-                var cPend = { type:'customer_select', matches:cMatches, dateFilter:qIntent.dateFilter, ts:Date.now() };
-                if (database) try { await database.ref('pending/'+safeFrom).set(cPend); } catch(e){}
-                memoryPending[safeFrom] = cPend;
-                await sendText(from, cMsg);
-                return res.status(200).json({status:'ok'});
+                var cMsg = '*Multiple customers found. Kaunsa customer? Number reply karein:*\n\n'; cMatches.forEach(function(c,i){ cMsg += (i+1)+'. '+c.name+'\n'; });
+                var cPend = { type:'customer_select', matches:cMatches, dateRange:qIntent.dateRange, lastOnly:qIntent.lastOnly, ts:Date.now() };
+                if (database) try { await database.ref('pending/'+safeFrom).set(cPend); } catch(e){} memoryPending[safeFrom] = cPend;
+                await sendText(from, cMsg); return res.status(200).json({status:'ok'});
             }
-
-            var cReport = getCustomerReport(cMatches[0].name, invoiceMap, qIntent.dateFilter);
-            await sendText(from, cReport);
+            await sendText(from, getCustomerReport(cMatches[0].name, invoiceMap, qIntent.dateRange, qIntent.lastOnly));
             return res.status(200).json({status:'ok'});
         }
 
-        // ✅ AI ANALYTICS FALLBACK (For complex queries code can't handle)
         if (qIntent.type === 'ai_analytics' || qIntent.type === 'general') {
             var aiContext = generateAIContext(allRows, invoiceMap, mrpMap, dlpMap, text);
             var aiAnswer = await getAIReply(text, aiContext, sysPrompt);
-            
-            if (aiAnswer && !aiAnswer.toLowerCase().includes('admin will reply soon')) {
-                await sendText(from, aiAnswer);
-            } else {
-                await sendText(from, 'Please wait, admin will reply soon.');
-            }
+            if (aiAnswer && !aiAnswer.toLowerCase().includes('admin will reply soon')) { await sendText(from, aiAnswer); } else { await sendText(from, 'Please wait, admin will reply soon.'); }
             return res.status(200).json({status:'ok'});
         }
 
-        // ── DEFAULT FALLBACK ─────────────────────────────────────────────
         await sendText(from, 'Please wait, admin will reply soon.');
         return res.status(200).json({status:'ok'});
-
     } catch (e) {
         console.error('[WH] Fatal:', e.message, e.stack);
         return res.status(200).send('System Error');
