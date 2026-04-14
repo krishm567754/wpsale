@@ -24,7 +24,7 @@ function sanitizePath(str) { return str.replace(/[@.\[\]#\$\/]/g, '_'); }
 
 async function getSystemPrompt() {
     var d = getFirebase();
-    var def = 'Tu Krish hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf CONTEXT DATA se jawab de. Kuch bhi invent mat kar.\n2. 0.9L aur 900ml dono same hote hain. 1ltr = 1L.\n3. CRITICAL: NEVER calculate or divide prices. If a size is missing, DO NOT divide larger pack prices. Output exact listed price only.\n4. Format: *Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n5. Text Hinglish me rakho.\n6. Emojis bilkul use mat karo. Rupee sign ki jagah "Rs." likho.\n7. Agar answer nahi mile to likho: "Please wait, admin will reply soon."';
+    var def = 'Tu Krish hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf CONTEXT DATA se jawab de. Kuch bhi invent mat kar.\n2. 0.9L aur 900ml dono same hote hain.\n3. Exact Size ki value batayein jo user ne puchi hai.\n4. Format: *Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n5. Text Hinglish me rakho.\n6. Emojis ya special symbols bilkul use mat karo. Rupee sign ki jagah sirf "Rs." likho.\n7. Agar answer CONTEXT DATA me clearly nahi milta to exactly likho: "Please wait, admin will reply soon."';
     if (!d) return def;
     try { var s = await d.ref('botConfig/systemPrompt').get(); return s.exists() ? s.val() : def; } catch (e) { return def; }
 }
@@ -36,7 +36,6 @@ async function savePDFList(data) { var d = getFirebase(); if (d) { try { await d
 function sanitizeReply(t) {
     if (!t) return '';
     var clean = t.replace(/₹/g, 'Rs.').replace(/â‚¹/g, 'Rs.').replace(/Rs\./g, 'Rs.');
-    // Aggressive strip of all emojis, zero-width chars, and non-printable ascii
     clean = clean.replace(/[^\x20-\x7E\n]/g, '');
     return clean.replace(/\*\*/g, '*').replace(/\n{3,}/g, '\n\n').split('\n').map(function(l){return l.trim();}).join('\n').trim();
 }
@@ -204,36 +203,73 @@ function searchProducts(query, mrpMap, dlpMap) {
     products.sort(function(a,b){ return b.score - a.score; }); return products.slice(0, 5);
 }
 
+// ─── ✅ DIRECT INVOICE NUMBER SEARCH (Super Smart) ───────────────────────
 function searchInvoices(query, invoiceMap) {
     var q = query.replace(/[^a-zA-Z0-9\/\- ]/g, '').toLowerCase().trim();
-    if (/^\d{1,2}$/.test(q) || q.length < 3) return [];
-    var matches = []; var userKeywords = q.split(' ').filter(function(w){ return w.length > 3; }); if (userKeywords.length === 0) userKeywords = [q];
+    // Allow direct numbers (11, 00011, etc). Otherwise need 3 chars.
+    if (q.length < 3 && !/^\d+$/.test(q.replace(/\s+/g,''))) return [];
+    
+    var matches = []; 
+    var userKeywords = q.split(' ').filter(function(w){ return w.length > 2; }); 
+    if (userKeywords.length === 0) userKeywords = [q];
+    
+    var qClean = q.replace(/[^a-z0-9]/g, ''); 
+    if (!qClean) return [];
+
     for (var invNo in invoiceMap) { 
         var rows = invoiceMap[invNo]; 
-        var custName = (rows[0]['Customer Name'] || '').toLowerCase(); 
+        var custName = (rows[0]['Customer Name'] || '').toLowerCase().replace(/[^a-z0-9 ]/g, ''); 
         var invClean = invNo.replace(/[^a-zA-Z0-9]/g, '').toLowerCase(); 
-        var qClean = q.replace(/[^a-zA-Z0-9]/g, ''); 
-        var matchInv = invClean.indexOf(qClean) !== -1 || qClean.indexOf(invClean) !== -1; 
-        var keywordScore = userKeywords.filter(function(k){ return custName.indexOf(k) !== -1; }).length; 
-        if (matchInv || keywordScore > 0) matches.push({ invNo: invNo, rows: rows, customer: rows[0]['Customer Name'], score: matchInv ? 10 : keywordScore }); 
+        
+        var exactMatch = (invClean === qClean);
+        var endsWithMatch = invClean.endsWith(qClean);
+        var matchInv = (invClean.indexOf(qClean) !== -1); 
+        
+        var keywordScore = 0;
+        if (custName === qClean) keywordScore += 1000;
+        else if (custName.startsWith(qClean)) keywordScore += 500;
+        else if (custName.indexOf(qClean) !== -1) keywordScore += 100;
+        else {
+            userKeywords.forEach(function(k){ 
+                if (custName.indexOf(k) !== -1) keywordScore += 10; 
+            });
+        }
+        
+        var score = keywordScore;
+        if (exactMatch) score += 5000;
+        else if (endsWithMatch && /^\d+$/.test(qClean)) score += 3000; // Boost if they just typed the ending numbers (e.g. 11, 149)
+        else if (matchInv) score += 2000;
+        
+        if (score > 0) { 
+            matches.push({ invNo: invNo, rows: rows, customer: rows[0]['Customer Name'], score: score }); 
+        } 
     }
-    matches.sort(function(a,b){ return b.score - a.score; }); return matches.slice(0, 5);
+    matches.sort(function(a,b){ return b.score - a.score; }); 
+    return matches.slice(0, 5);
 }
 
 function searchCustomers(query, invoiceMap) {
     var lower = query.toLowerCase();
     var custStop = ['ka','ki','ke','ko','ne','liya','batao','dikhao','data','report','invoice','bill','total','volume','wale','wali','mahine','month','week','hafte','is','this','last','pichle','aaj','today','all','sab','poora','maal','liter','l','hisab','kitna','sale','bika'];
-    var cleanQuery = lower.replace(new RegExp('\\b(' + custStop.join('|') + ')\\b', 'g'), ' ').trim();
+    var cleanQuery = lower.replace(new RegExp('\\b(' + custStop.join('|') + ')\\b', 'g'), ' ').replace(/[^a-z0-9 ]/g, '').trim();
     if (cleanQuery.length < 3) return [];
     
     var custSet = {}; for (var inv in invoiceMap) { var c = invoiceMap[inv][0]['Customer Name']; if (c) custSet[c] = true; }
     var matches = [];
     for (var c in custSet) {
-        var cLower = c.toLowerCase(); var score = 0;
-        if (cLower === cleanQuery) score = 100;
-        else if (cLower.indexOf(cleanQuery) !== -1) score = 50;
-        else if (cleanQuery.indexOf(cLower) !== -1) score = 30;
-        else { var words = cleanQuery.split(/\s+/); for (var w = 0; w < words.length; w++) { if (words[w].length >= 3 && cLower.indexOf(words[w]) !== -1) score += 10; } }
+        var cLower = c.toLowerCase().replace(/[^a-z0-9 ]/g, ''); 
+        var score = 0;
+        if (cLower === cleanQuery) score = 1000;
+        else if (cLower.startsWith(cleanQuery)) score = 500;
+        else if (cLower.indexOf(cleanQuery) !== -1) score = 100;
+        else { 
+            var words = cleanQuery.split(/\s+/); 
+            var matchedWords = 0;
+            for (var w = 0; w < words.length; w++) { 
+                if (words[w].length >= 3 && cLower.indexOf(words[w]) !== -1) { score += 10; matchedWords++; } 
+            }
+            if (matchedWords === 0) score = 0;
+        }
         if (score > 0) matches.push({ name: c, score: score });
     }
     matches.sort(function(a,b){ return b.score - a.score; });
@@ -426,13 +462,13 @@ async function loadAllData() {
     var mrpPdfFile  = fileList.find(function(f){ return f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); }); var listPdfFile = fileList.find(function(f){ return (f.toLowerCase().includes('list')||f.toLowerCase().includes('dlp')) && !f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); });
     var mrpPdfUrl   = mrpPdfFile  ? base+'/'+encodeURIComponent(mrpPdfFile)  : ''; var listPdfUrl  = listPdfFile ? base+'/'+encodeURIComponent(listPdfFile) : '';
     globalCache = { invoiceMap: invoiceMap, allRows: allRows, mrpMap: mrpMap, dlpMap: dlpMap, mrpFile: mrpFile, dlpFile: dlpFile, mrpPdfUrl: mrpPdfUrl, listPdfUrl: listPdfUrl, mrpPdfFile: mrpPdfFile, listPdfFile: listPdfFile };
-    lastCacheTime = Date.now(); return globalCache;
+    lastCacheTime = Date.now(); console.log('[CACHE] Loaded.'); return globalCache;
 }
 
 // ─── AI REPLY ──────────────────────────────────────────────────────────────
 async function getAIReply(userMsg, contextData, prompt) {
     var key = process.env.NVIDIA_API_KEY; if (!key) return null;
-    try { var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', { model: 'meta/llama-3.1-70b-instruct', messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'CONTEXT DATA:\n' + contextData + '\n\nUSER QUERY: ' + userMsg }], max_tokens: 800, temperature: 0.1 }, { headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 30000 }); var reply = res.data.choices[0].message.content; if (!reply || reply.toLowerCase().includes('cannot') || reply.toLowerCase().includes('not found') || reply.toLowerCase().includes('admin will reply')) return null; return sanitizeReply(reply); } catch (e) { return null; }
+    try { var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', { model: 'meta/llama-3.1-70b-instruct', messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'CONTEXT DATA:\n' + contextData + '\n\nUSER QUERY: ' + userMsg }], max_tokens: 800, temperature: 0.1 }, { headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 30000 }); var reply = res.data.choices[0].message.content; if (!reply || reply.toLowerCase().includes('cannot') || reply.toLowerCase().includes('not found') || reply.toLowerCase().includes('admin will reply')) return null; return sanitizeReply(reply); } catch (e) { console.error('[AI] Error:', e.message); return null; }
 }
 
 async function sendText(to, text) { var base = (process.env.EVOLUTION_API_URL||'').replace(/\/$/,''); var inst = process.env.EVOLUTION_INSTANCE; var key = process.env.EVOLUTION_API_KEY; var num = to.replace(/@s\.whatsapp\.net$/,'').replace(/@g\.us$/,''); if (!base||!inst||!key) return; try { await axios.post(base+'/message/sendText/'+inst,{number:num,text:text},{headers:{'Content-Type':'application/json','apikey':key}}); } catch(e){} }
@@ -458,7 +494,7 @@ module.exports = async function(req, res) {
         var sysPrompt = results[0]; var dataResult = results[1]||{}; var savedPDFs = results[2];
         var invoiceMap = dataResult.invoiceMap || {}; var mrpMap = dataResult.mrpMap || {}; var dlpMap = dataResult.dlpMap || {}; var allRows = dataResult.allRows || [];
 
-        // ── PENDING SELECTION ──────────────────────────────────────────────
+        // ── ✅ PENDING SELECTION (Menu Choices) ──────────────────────────────
         if (/^\d+$/.test(text)) {
             var pending = null;
             try { var snap = await database.ref('pending/' + safeFrom).get(); if(snap.exists()) pending = snap.val(); } catch(e){}
@@ -466,7 +502,8 @@ module.exports = async function(req, res) {
             
             if (pending && pending.matches) {
                 var idx = parseInt(text) - 1;
-                if (pending.matches[idx]) {
+                // If within menu range
+                if (idx >= 0 && idx < pending.matches.length) {
                     if (pending.type === 'invoice') { var m = pending.matches[idx]; var f = m.rows[0]; var prods = m.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG = m.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl = m.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m.invNo+'\n*Customer:* '+f['Customer Name']+'\n*Products:* '+prods+'\n*Total Value:* Rs.'+tG.toFixed(2)+'\n*Total Volume:* '+vl.toFixed(1)+' L\n*Date:* '+cleanDate(f['Invoice Date'])+'\n*Payment:* '+f['Mode Of Payement']); } 
                     else if (pending.type === 'product') { 
                         var p = pending.matches[idx]; 
@@ -478,8 +515,12 @@ module.exports = async function(req, res) {
                     
                     try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
                     delete memoryPending[safeFrom];
-                } else { await sendText(from, 'Galat number. 1 se '+pending.matches.length+' ke beech chunein.'); }
-                return res.status(200).json({ status: 'ok' });
+                    return res.status(200).json({ status: 'ok' });
+                } else {
+                    // Out of bounds -> clear pending and let it run as direct invoice number search below!
+                    try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
+                    delete memoryPending[safeFrom];
+                }
             }
         }
 
@@ -554,6 +595,8 @@ module.exports = async function(req, res) {
         // ── 2. PRICE & INVOICE SEARCH ──────────
         var isRateQ = ['rate','price','mrp','dlp','kitne ka','dam','rupay'].some(function(w){return lower.includes(w);});
         var prodMatches = searchProducts(text, mrpMap, dlpMap); 
+        
+        // ✅ Direct Invoice Search applies here
         var invMatches  = searchInvoices(text, invoiceMap); 
 
         if (isRateQ || (prodMatches.length > 0 && invMatches.length === 0)) {
@@ -570,7 +613,7 @@ module.exports = async function(req, res) {
         if (invMatches.length === 1) { var m2 = invMatches[0]; var f2 = m2.rows[0]; var prods2 = m2.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m2.invNo+'\n*Customer:* '+f2['Customer Name']+'\n*Products:* '+prods2+'\n*Total Value:* Rs.'+tG2.toFixed(2)+'\n*Total Volume:* '+vl2.toFixed(1)+' L\n*Date:* '+cleanDate(f2['Invoice Date'])+'\n*Payment:* '+f2['Mode Of Payement']); return res.status(200).json({status:'ok'}); }
         if (invMatches.length > 1) { var msg2 = '*Multiple invoices. Number reply karein:*\n\n'; invMatches.forEach(function(m,i){ msg2 += (i+1)+'. '+m.customer+' ('+m.invNo+')\n'; }); var pend2 = { type:'invoice', matches:invMatches, ts:Date.now() }; try { await database.ref('pending/'+safeFrom).set(pend2); } catch(e){} memoryPending[safeFrom] = pend2; await sendText(from, msg2); return res.status(200).json({status:'ok'}); }
 
-        // ── 3. SPECIFIC CUSTOMER SEARCH ───────────────────
+        // ── 3. SPECIFIC CUSTOMER SEARCH (FAST MATCH) ───────────────────
         var cMatches = searchCustomers(text, invoiceMap);
         var isCustQuery = ['bill', 'invoice', 'khata', 'hisab', 'data', 'report', 'ka', 'ki', 'batao'].some(function(w){return lower.includes(w);});
         
@@ -590,7 +633,7 @@ module.exports = async function(req, res) {
             }
         }
 
-        // ── 4. AI DATA ANALYST FALLBACK ──
+        // ── 4. AI DATA ANALYST FALLBACK (For custom questions like lowest selling) ──
         var isCustomAnalytics = ['sabse', 'kam', 'lowest', 'low', 'aaj', 'kal', 'din', 'bika', 'invoice', 'bill', 'hisab'].some(function(w){return lower.includes(w);});
 
         if (isCustomAnalytics) {
