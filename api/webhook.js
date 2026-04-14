@@ -24,7 +24,7 @@ function sanitizePath(str) { return str.replace(/[@.\[\]#\$\/]/g, '_'); }
 
 async function getSystemPrompt() {
     var d = getFirebase();
-    var def = 'Tu Krish hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf CONTEXT DATA se jawab de. Kuch bhi invent mat kar.\n2. 0.9L aur 900ml dono same hote hain.\n3. Exact Size ki value batayein jo user ne puchi hai.\n4. Format: *Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n5. Text Hinglish me rakho.\n6. Emojis ya special symbols bilkul use mat karo. Rupee sign ki jagah sirf "Rs." likho.\n7. Agar answer CONTEXT DATA me clearly nahi milta to exactly likho: "Please wait, admin will reply soon."';
+    var def = 'Tu Krish hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf CONTEXT DATA se jawab de. Kuch bhi invent mat kar.\n2. 0.9L aur 900ml dono same hote hain. 1ltr = 1L.\n3. CRITICAL: NEVER calculate or divide prices. If a size is missing, DO NOT divide larger pack prices. Output exact listed price only.\n4. Format: *Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n5. Text Hinglish me rakho.\n6. Emojis bilkul use mat karo. Rupee sign ki jagah "Rs." likho.\n7. Agar answer nahi mile to likho: "Please wait, admin will reply soon."';
     if (!d) return def;
     try { var s = await d.ref('botConfig/systemPrompt').get(); return s.exists() ? s.val() : def; } catch (e) { return def; }
 }
@@ -36,6 +36,7 @@ async function savePDFList(data) { var d = getFirebase(); if (d) { try { await d
 function sanitizeReply(t) {
     if (!t) return '';
     var clean = t.replace(/₹/g, 'Rs.').replace(/â‚¹/g, 'Rs.').replace(/Rs\./g, 'Rs.');
+    // Aggressive strip of all emojis, zero-width chars, and non-printable ascii
     clean = clean.replace(/[^\x20-\x7E\n]/g, '');
     return clean.replace(/\*\*/g, '*').replace(/\n{3,}/g, '\n\n').split('\n').map(function(l){return l.trim();}).join('\n').trim();
 }
@@ -152,6 +153,10 @@ function parseDataQuery(text) {
 function isDateInRange(ts, dateRange) {
     if (!dateRange) return true; 
     if (ts <= 0) return false; 
+    if (dateRange.exactMonth !== undefined) {
+        var d = new Date(ts);
+        if (d.getMonth() === dateRange.exactMonth) return true;
+    }
     return (ts >= dateRange.from && ts <= dateRange.to);
 }
 
@@ -421,13 +426,13 @@ async function loadAllData() {
     var mrpPdfFile  = fileList.find(function(f){ return f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); }); var listPdfFile = fileList.find(function(f){ return (f.toLowerCase().includes('list')||f.toLowerCase().includes('dlp')) && !f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); });
     var mrpPdfUrl   = mrpPdfFile  ? base+'/'+encodeURIComponent(mrpPdfFile)  : ''; var listPdfUrl  = listPdfFile ? base+'/'+encodeURIComponent(listPdfFile) : '';
     globalCache = { invoiceMap: invoiceMap, allRows: allRows, mrpMap: mrpMap, dlpMap: dlpMap, mrpFile: mrpFile, dlpFile: dlpFile, mrpPdfUrl: mrpPdfUrl, listPdfUrl: listPdfUrl, mrpPdfFile: mrpPdfFile, listPdfFile: listPdfFile };
-    lastCacheTime = Date.now(); console.log('[CACHE] Loaded.'); return globalCache;
+    lastCacheTime = Date.now(); return globalCache;
 }
 
 // ─── AI REPLY ──────────────────────────────────────────────────────────────
 async function getAIReply(userMsg, contextData, prompt) {
     var key = process.env.NVIDIA_API_KEY; if (!key) return null;
-    try { var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', { model: 'meta/llama-3.1-70b-instruct', messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'CONTEXT DATA:\n' + contextData + '\n\nUSER QUERY: ' + userMsg }], max_tokens: 800, temperature: 0.1 }, { headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 30000 }); var reply = res.data.choices[0].message.content; if (!reply || reply.toLowerCase().includes('cannot') || reply.toLowerCase().includes('not found') || reply.toLowerCase().includes('admin will reply')) return null; return sanitizeReply(reply); } catch (e) { console.error('[AI] Error:', e.message); return null; }
+    try { var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', { model: 'meta/llama-3.1-70b-instruct', messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'CONTEXT DATA:\n' + contextData + '\n\nUSER QUERY: ' + userMsg }], max_tokens: 800, temperature: 0.1 }, { headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 30000 }); var reply = res.data.choices[0].message.content; if (!reply || reply.toLowerCase().includes('cannot') || reply.toLowerCase().includes('not found') || reply.toLowerCase().includes('admin will reply')) return null; return sanitizeReply(reply); } catch (e) { return null; }
 }
 
 async function sendText(to, text) { var base = (process.env.EVOLUTION_API_URL||'').replace(/\/$/,''); var inst = process.env.EVOLUTION_INSTANCE; var key = process.env.EVOLUTION_API_KEY; var num = to.replace(/@s\.whatsapp\.net$/,'').replace(/@g\.us$/,''); if (!base||!inst||!key) return; try { await axios.post(base+'/message/sendText/'+inst,{number:num,text:text},{headers:{'Content-Type':'application/json','apikey':key}}); } catch(e){} }
@@ -463,7 +468,12 @@ module.exports = async function(req, res) {
                 var idx = parseInt(text) - 1;
                 if (pending.matches[idx]) {
                     if (pending.type === 'invoice') { var m = pending.matches[idx]; var f = m.rows[0]; var prods = m.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG = m.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl = m.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m.invNo+'\n*Customer:* '+f['Customer Name']+'\n*Products:* '+prods+'\n*Total Value:* Rs.'+tG.toFixed(2)+'\n*Total Volume:* '+vl.toFixed(1)+' L\n*Date:* '+cleanDate(f['Invoice Date'])+'\n*Payment:* '+f['Mode Of Payement']); } 
-                    else if (pending.type === 'product') { var p = pending.matches[idx]; var aiR = await getAIReply('Query: '+pending.originalQuery+'\nSelected: '+p.name+'. Exact MRP/DLP. 0.9L=900ml.', '[PRICE DATA]\n'+p.chunk, sysPrompt); await sendText(from, aiR || 'Data nahi mila.'); }
+                    else if (pending.type === 'product') { 
+                        var p = pending.matches[idx]; 
+                        var aiPrompt = 'User Query: "'+pending.originalQuery+'"\nSelected: '+p.name+'\n\nRULES:\n1. Match EXACT size requested (1ltr=1L).\n2. CRITICAL: DO NOT divide or calculate prices. Just extract from data.\n3. If size not listed, say EXACTLY: "Bhai, is product ka ye size price list mein nahi hai."';
+                        var aiR = await getAIReply(aiPrompt, '[PRICE DATA]\n'+p.chunk, sysPrompt); 
+                        await sendText(from, aiR || 'Data nahi mila.'); 
+                    }
                     else if (pending.type === 'customer_report') { var cReport = getCustomerReport(pending.matches[idx].name, invoiceMap, pending.dateRange, pending.lastOnly); await sendText(from, cReport); }
                     
                     try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
@@ -509,7 +519,6 @@ module.exports = async function(req, res) {
 
         if (qIntent.type) {
             var autoDate = false;
-            // Set Default Month ONLY IF date is missing
             if (!qIntent.filters.dateRange) {
                 var now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
                 var cy = now.getFullYear(); var cm = now.getMonth();
@@ -527,7 +536,6 @@ module.exports = async function(req, res) {
             else if (qIntent.type === 'executive_report') resultText = getExecutiveReport(invoiceMap, qIntent.filters.dateRange);
             else if (qIntent.type === 'period_summary') resultText = getPeriodSummary(invoiceMap, qIntent.filters.dateRange);
 
-            // Fallback: If no data in Current Month, fetch ALL TIME.
             if (autoDate && resultText === 'NO_DATA') {
                 if (qIntent.type === 'top_customers') resultText = "*(Current Month me data nahi mila. All-Time data de raha hu)*\n\n" + getTopCustomers(invoiceMap, null, qIntent.limit);
                 else if (qIntent.type === 'top_products') resultText = "*(Current Month me data nahi mila. All-Time data de raha hu)*\n\n" + getTopProducts(allRows, null, qIntent.limit);
@@ -550,19 +558,24 @@ module.exports = async function(req, res) {
 
         if (isRateQ || (prodMatches.length > 0 && invMatches.length === 0)) {
             if (prodMatches.length === 0) { await sendText(from, 'Please wait, admin will reply soon.'); return res.status(200).json({status:'ok'}); }
-            if (prodMatches.length === 1) { var aiR = await getAIReply('Query: '+text+'\nExact MRP/DLP for size. 0.9L=900ml.', '[PRICE DATA]\n'+prodMatches[0].chunk, sysPrompt); await sendText(from, aiR || 'Data nahi mila.'); return res.status(200).json({status:'ok'}); }
+            if (prodMatches.length === 1) { 
+                var aiPrompt = 'User Query: "'+text+'"\n\nRULES:\n1. Match exact requested size (e.g. 1ltr=1L, 900ml=0.9L).\n2. NEVER calculate or divide prices. If exact size is missing, say EXACTLY: "Ye size price list me nahi hai."\n3. Format:\n*Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y';
+                var aiR = await getAIReply(aiPrompt, '[PRICE DATA]\n'+prodMatches[0].chunk, sysPrompt); 
+                await sendText(from, aiR || 'Data nahi mila.'); 
+                return res.status(200).json({status:'ok'}); 
+            }
             var msg = '*Kaunsa product? Number reply karein:*\n\n'; prodMatches.forEach(function(p,i){ msg += (i+1)+'. '+p.name+'\n'; }); var pend = { type:'product', matches:prodMatches, originalQuery:text, ts:Date.now() }; try { await database.ref('pending/'+safeFrom).set(pend); } catch(e){} memoryPending[safeFrom] = pend; await sendText(from, msg); return res.status(200).json({status:'ok'});
         }
 
         if (invMatches.length === 1) { var m2 = invMatches[0]; var f2 = m2.rows[0]; var prods2 = m2.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m2.invNo+'\n*Customer:* '+f2['Customer Name']+'\n*Products:* '+prods2+'\n*Total Value:* Rs.'+tG2.toFixed(2)+'\n*Total Volume:* '+vl2.toFixed(1)+' L\n*Date:* '+cleanDate(f2['Invoice Date'])+'\n*Payment:* '+f2['Mode Of Payement']); return res.status(200).json({status:'ok'}); }
         if (invMatches.length > 1) { var msg2 = '*Multiple invoices. Number reply karein:*\n\n'; invMatches.forEach(function(m,i){ msg2 += (i+1)+'. '+m.customer+' ('+m.invNo+')\n'; }); var pend2 = { type:'invoice', matches:invMatches, ts:Date.now() }; try { await database.ref('pending/'+safeFrom).set(pend2); } catch(e){} memoryPending[safeFrom] = pend2; await sendText(from, msg2); return res.status(200).json({status:'ok'}); }
 
-        // ── 3. SPECIFIC CUSTOMER SEARCH (FAST MATCH) ───────────────────
+        // ── 3. SPECIFIC CUSTOMER SEARCH ───────────────────
         var cMatches = searchCustomers(text, invoiceMap);
         var isCustQuery = ['bill', 'invoice', 'khata', 'hisab', 'data', 'report', 'ka', 'ki', 'batao'].some(function(w){return lower.includes(w);});
         
         if (cMatches.length > 0 && cMatches[0].score >= 30 && (isCustQuery || lower.includes(cMatches[0].name.toLowerCase()))) {
-            if (cMatches.length === 1 || (cMatches.length > 1 && cMatches[0].score > cMatches[1].score + 20)) {
+            if (cMatches.length === 1 || (cMatches.length > 1 && cMatches[0].score > cMatches[1].score + 200)) {
                 var cReport = getCustomerReport(cMatches[0].name, invoiceMap, qIntent.filters.dateRange, false);
                 await sendText(from, cReport);
                 return res.status(200).json({ status: 'ok' });
@@ -577,7 +590,7 @@ module.exports = async function(req, res) {
             }
         }
 
-        // ── 4. AI DATA ANALYST FALLBACK (For custom questions like "lowest selling") ──
+        // ── 4. AI DATA ANALYST FALLBACK ──
         var isCustomAnalytics = ['sabse', 'kam', 'lowest', 'low', 'aaj', 'kal', 'din', 'bika', 'invoice', 'bill', 'hisab'].some(function(w){return lower.includes(w);});
 
         if (isCustomAnalytics) {
