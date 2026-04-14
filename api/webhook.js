@@ -23,7 +23,7 @@ function sanitizePath(str) { return str.replace(/[@.\[\]#\$\/]/g, '_'); }
 
 async function getSystemPrompt() {
   var d = getFirebase();
-  var def = 'Tu Krish hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf data se exact rate batao. 0.9L = 900ml (ye dono same hain).\n2. Exact Size ki value batayein jo user ne puchi hai.\n3. Format: *Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n4. Text Hinglish me rakho.';
+  var def = 'Tu Krish hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf data se exact rate batao. 0.9L aur 900ml dono same hote hain.\n2. Exact Size ki value batayein jo user ne puchi hai. Agar user ne 900ml pucha hai, toh sirf 900ml ka batayein.\n3. Format:\n*Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n4. Text Hinglish me rakho.';
   if (!d) return def;
   try { var s = await d.ref('botConfig/systemPrompt').get(); return s.exists() ? s.val() : def; } catch (e) { return def; }
 }
@@ -47,12 +47,14 @@ function cleanDate(val) {
   return m + '/' + d + '/' + y;
 }
 
-// ✅ SUPER-FIX: Standardizes all weird Excel column names to clean Liters/ML
+// ✅ FIX: Converts all varying size formats to standard clean keys
 function normalizeSizeHeader(header) {
-  var h = String(header).toLowerCase().replace(/\s+/g, '');
-  h = h.replace(/\/+$/, '').replace(/\\+$/, ''); // Strip slashes like '1/' or '210/'
+  if (!header) return '';
+  var h = String(header).toLowerCase().replace(/\s+/g, '').replace(/\/+$/, '').replace(/\\+$/, '');
+  
+  if (h.indexOf('brand') !== -1) return 'BRAND NAME';
 
-  if (h === '1.2/11' || h === '1.2/1l') return '1L'; // Castrol specific fix
+  if (h === '1.2/11' || h === '1.2/1l') return '1L'; // Castrol specific issue
   
   if (h === '900ml' || h === '0.9l' || h === '900') return '900ML';
   if (h === '800ml' || h === '0.8l' || h === '800') return '800ML';
@@ -89,27 +91,50 @@ function normalizeSizeHeader(header) {
   return String(header).trim().toUpperCase();
 }
 
-function loadPriceListFromExcel(rows) {
+// ✅ MEGA-FIX: Read arrays natively so empty columns do not shift data
+function loadPriceListFromExcel(wb) {
   var priceMap = {};
-  for (var i = 0; i < rows.length; i++) {
-    var row = rows[i];
-    var name = row['BRAND NAME'] || row['Brand Name'] || row['brand name'] || '';
-    if (!name || name.length < 4) continue;
-    name = name.trim();
-    priceMap[name] = {};
-    for (var key in row) {
-      if (key.toUpperCase() === 'BRAND NAME') continue;
-      var size = normalizeSizeHeader(key);
-      var val = row[key];
-      if (val && !isNaN(parseFloat(val))) {
-        priceMap[name][size] = parseFloat(val);
+  for (var s = 0; s < wb.SheetNames.length; s++) {
+    // Read as 2D Array to preserve exact column positions
+    var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[s]], { header: 1, defval: '' });
+    var currentHeaders = [];
+    
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      if (!row || row.length === 0) continue;
+      
+      var col0 = String(row[0] || '').trim();
+      var lowerCol0 = col0.toLowerCase();
+      
+      // If row starts with "BRAND NAME", it's the header row
+      if (lowerCol0.indexOf('brand name') !== -1) {
+        currentHeaders = row.map(function(c) { return normalizeSizeHeader(c); });
+        continue;
+      }
+      
+      // If we have headers and a valid product name
+      if (currentHeaders.length > 0 && col0.length > 3) {
+        // Exclude category rows (e.g., "MOTORCYCLE OIL" with no prices)
+        var hasPrice = false;
+        for (var j = 1; j < row.length; j++) { if (row[j] !== '' && !isNaN(parseFloat(row[j]))) { hasPrice = true; break; } }
+        if (!hasPrice) continue;
+        
+        if (!priceMap[col0]) priceMap[col0] = {};
+        
+        // Match exact cell to exact header
+        for (var j = 1; j < row.length; j++) {
+          var size = currentHeaders[j];
+          var val = parseFloat(row[j]);
+          if (size && size !== '' && !isNaN(val)) {
+            priceMap[col0][size] = val;
+          }
+        }
       }
     }
   }
   return priceMap;
 }
 
-// ✅ MEGA-FIX: Merges MRP and DLP objects perfectly even if names have typos
 function searchProducts(query, mrpMap, dlpMap) {
   var q = query.toLowerCase().replace(/[^a-z0-9]/g, ' ');
   var words = q.split(/\s+/);
@@ -198,12 +223,14 @@ async function loadAllData() {
   
   var fileList = []; try { fileList = (await axios.get(base + '/index.json')).data; } catch(e) { return null; }
   
+  // Sales Invoices
   var excelFiles = fileList.filter(function(f){ 
     return f.match(/\.(xlsx|xls|csv)$/i) && 
            !f.toLowerCase().includes('mrp') && 
            !f.toLowerCase().includes('dlp') && 
-           !f.toLowerCase().includes('list price'); 
+           !f.toLowerCase().includes('list'); 
   });
+  
   var allRows = [];
   for (var k = 0; k < excelFiles.length; k++) {
     try { 
@@ -212,55 +239,38 @@ async function loadAllData() {
       for (var s = 0; s < wb.SheetNames.length; s++) { allRows = allRows.concat(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[s]], {defval:''})); } 
     } catch(e){}
   }
-  
   var invoiceMap = {}; 
   for (var m = 0; m < allRows.length; m++) { 
     var inv = allRows[m]['Invoice No'] || ''; 
     if(inv){ if(!invoiceMap[inv]) invoiceMap[inv] = []; invoiceMap[inv].push(allRows[m]); } 
   }
   
+  // MRP Extraction
   var mrpFile = fileList.find(function(f){ return f.toLowerCase().includes('mrp') && f.match(/\.(xlsx|xls)$/i); });
   var mrpMap = {};
   if (mrpFile) {
     try {
       var mrpRes = await axios.get(base + '/' + encodeURIComponent(mrpFile), {responseType:'arraybuffer'});
       var mrpWb = XLSX.read(mrpRes.data, {type:'buffer'});
-      var mrpRows = [];
-      for (var ms = 0; ms < mrpWb.SheetNames.length; ms++) { mrpRows = mrpRows.concat(XLSX.utils.sheet_to_json(mrpWb.Sheets[mrpWb.SheetNames[ms]], {defval:''})); }
-      mrpMap = loadPriceListFromExcel(mrpRows);
+      mrpMap = loadPriceListFromExcel(mrpWb);
     } catch(e) {}
   }
   
-  var dlpFile = fileList.find(function(f){ return (f.toLowerCase().includes('dlp') || f.toLowerCase().includes('list price')) && !f.toLowerCase().includes('mrp') && f.match(/\.(xlsx|xls)$/i); });
+  // DLP Extraction
+  var dlpFile = fileList.find(function(f){ return (f.toLowerCase().includes('dlp') || f.toLowerCase().includes('list')) && !f.toLowerCase().includes('mrp') && f.match(/\.(xlsx|xls)$/i); });
   var dlpMap = {};
   if (dlpFile) {
     try {
       var dlpRes = await axios.get(base + '/' + encodeURIComponent(dlpFile), {responseType:'arraybuffer'});
       var dlpWb = XLSX.read(dlpRes.data, {type:'buffer'});
-      var dlpRows = [];
-      for (var ds = 0; ds < dlpWb.SheetNames.length; ds++) { dlpRows = dlpRows.concat(XLSX.utils.sheet_to_json(dlpWb.Sheets[dlpWb.SheetNames[ds]], {defval:''})); }
-      dlpMap = loadPriceListFromExcel(dlpRows);
+      dlpMap = loadPriceListFromExcel(dlpWb);
     } catch(e) {}
-  }
-  
-  var lines = ['INVOICE DATABASE:','Format: InvNo|Date|Customer|Town|District|SalesExec|Products(Vol)|TotalVol|TotalWithGST|WithoutGST|CGST|SGST|Payment',''];
-  var invKeys = Object.keys(invoiceMap); 
-  for (var n = 0; n < invKeys.length; n++) { 
-    var invNo = invKeys[n]; var rows = invoiceMap[invNo]; var f = rows[0]; 
-    var prods = rows.map(function(r){ return r['Product Name'] + '(' + r['Product Volume'] + 'L)'; }).join(' + '); 
-    var tG = rows.reduce(function(s, r){ return s + (parseFloat(r['Total Value incl VAT/GST']) || 0); }, 0); 
-    var wG = rows.reduce(function(s, r){ return s + (parseFloat(r['Total Value Without GST']) || 0); }, 0); 
-    var cg = rows.reduce(function(s, r){ return s + (parseFloat(r['CGST Value']) || 0); }, 0); 
-    var sg = rows.reduce(function(s, r){ return s + (parseFloat(r['SGST Value']) || 0); }, 0); 
-    var vl = rows.reduce(function(s, r){ return s + (parseFloat(r['Product Volume']) || 0); }, 0); 
-    lines.push(invNo + '|' + cleanDate(f['Invoice Date']) + '|' + f['Customer Name'] + '|' + f['Town Name'] + '|' + f['District Name'] + '|' + f['Sales Executive Name'] + '|' + prods + '|' + vl.toFixed(1) + 'L|Rs.' + tG.toFixed(2) + '|Rs.' + wG.toFixed(2) + '|Rs.' + cg.toFixed(2) + '|Rs.' + sg.toFixed(2) + '|' + f['Mode Of Payement']); 
   }
   
   globalCache = { 
     invoiceMap: invoiceMap, 
     mrpMap: mrpMap, 
     dlpMap: dlpMap,
-    excelData: lines.join('\n'),
     mrpFile: mrpFile,
     dlpFile: dlpFile
   };
@@ -324,7 +334,7 @@ module.exports = async function(req, res) {
           } else if (pending.type === 'product') {
             var p = pending.matches[idx];
             var context = '[PRICE DATA]\n' + p.chunk;
-            var aiPrompt = 'User\'s ORIGINAL query was: "' + pending.originalQuery + '". Now User selected Product: ' + p.name + '. Give exact MRP and DLP for the SPECIFIC SIZE they originally asked for. Note: 0.9L = 900ml.';
+            var aiPrompt = 'User\'s ORIGINAL query was: "' + pending.originalQuery + '". \nNow User selected Product: ' + p.name + '. \nBelow is the exact price list for this product. Provide exact MRP and DLP ONLY for the SPECIFIC SIZE the user originally asked for. Note: 0.9L = 900ml.';
             var aiReply = await getAIReply(aiPrompt, context, sysPrompt);
             await sendText(from, aiReply);
           }
@@ -340,22 +350,12 @@ module.exports = async function(req, res) {
 
     if (isAdmin && text.indexOf('!setprompt ') === 0) { await saveSystemPrompt(text.slice(11).trim()); await sendText(from, 'Prompt update ho gaya!'); return res.status(200).json({ status: 'ok' }); }
     if (isAdmin && text === '!status') { await sendText(from, '*Bot Status*\nOnline'); return res.status(200).json({ status: 'ok' }); }
-    if (isAdmin && text.indexOf('!addpdf ') === 0) { var parts = text.slice(8).split('|').map(function(s){return s.trim();}); if(parts.length===3){var list=await getPDFList(); list[parts[0].toLowerCase()]={name:parts[1],url:parts[2]}; await savePDFList(list); await sendText(from,'PDF added!');} else {await sendText(from,'Format: !addpdf keyword | Name | URL');} return res.status(200).json({ status: 'ok' }); }
 
     var lower = text.toLowerCase();
     if (['hi','hello','namaste','hey','hii','good morning','kaise ho'].some(function(g){return lower.indexOf(g)!==-1;})) {
       await sendText(from, 'Hello! Main Krish hoon, Shri Laxmi Auto Store ki assistant. Invoice details, MRP/DLP rates, ya koi bhi query pooch sakte hain!');
       return res.status(200).json({ status: 'ok' });
     }
-
-    var sendWords = ['send','bhejo','share','bhej','de do','dedo','chahiye','pdf'];
-    var hasSend = sendWords.some(function(w){return lower.indexOf(w)!==-1;});
-    var hasMRP = ['mrp','maximum retail'].some(function(w){return lower.indexOf(w)!==-1;});
-    var hasList = ['list price','dlp','dealer price'].some(function(w){return lower.indexOf(w)!==-1;});
-    var base = process.env.GITHUB_RAW_BASE;
-    if (hasSend && hasMRP && dataResult.mrpFile) { await sendText(from, 'Sending ' + dataResult.mrpFile + '...'); await sendDocument(from, base + '/' + encodeURIComponent(dataResult.mrpFile), dataResult.mrpFile, dataResult.mrpFile); return res.status(200).json({ status: 'ok' }); }
-    if (hasSend && hasList && dataResult.dlpFile) { await sendText(from, 'Sending ' + dataResult.dlpFile + '...'); await sendDocument(from, base + '/' + encodeURIComponent(dataResult.dlpFile), dataResult.dlpFile, dataResult.dlpFile); return res.status(200).json({ status: 'ok' }); }
-    for (var k in savedPDFs) { if (lower.indexOf(k.toLowerCase()) !== -1 && hasSend) { await sendText(from, 'Sending ' + savedPDFs[k].name + '...'); await sendDocument(from, savedPDFs[k].url, savedPDFs[k].name, savedPDFs[k].name); return res.status(200).json({ status: 'ok' }); } }
 
     var prodMatches = searchProducts(text, dataResult.mrpMap, dataResult.dlpMap);
     var invMatches = searchInvoices(text, dataResult.invoiceMap);
@@ -365,7 +365,7 @@ module.exports = async function(req, res) {
       if (prodMatches.length === 1) {
         var p = prodMatches[0];
         var context = '[PRICE DATA]\n' + p.chunk;
-        var aiReply = await getAIReply('User Query: ' + text + '\nGive exact MRP and DLP for the specified size. Note: 0.9L = 900ml.', context, sysPrompt);
+        var aiReply = await getAIReply('User Query: ' + text + '\nGive exact MRP and DLP ONLY for the size explicitly mentioned in the query. Note: 0.9L is exactly equal to 900ml.', context, sysPrompt);
         await sendText(from, aiReply);
         return res.status(200).json({ status: 'ok' });
       } else if (prodMatches.length > 1) {
@@ -393,9 +393,6 @@ module.exports = async function(req, res) {
       if (database) { try { await database.ref('pending/' + safeFrom).set({ type: 'invoice', matches: invMatches, ts: Date.now() }); } catch (e) {} }
       memoryPending[safeFrom] = { type: 'invoice', matches: invMatches, ts: Date.now() };
       await sendText(from, msg);
-      return res.status(200).json({ status: 'ok' });
-    } else if (invMatches.length === 0 && (text.match(/^\d+$/) || text.toLowerCase().indexOf('inv') !== -1)) {
-      await sendText(from, 'Invoice nahi mila. Sahi details daalein.');
       return res.status(200).json({ status: 'ok' });
     }
 
