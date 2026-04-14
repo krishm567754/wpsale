@@ -58,7 +58,7 @@ function cleanDate(val) {
     return String(dt.getDate()).padStart(2,'0') + '/' + String(dt.getMonth()+1).padStart(2,'0') + '/' + dt.getFullYear();
 }
 
-// ─── ROBUST DATE EXTRACTOR (With Year Support) ──────────────────────────────
+// ─── ROBUST DATE EXTRACTOR ───────────────────────────────────
 function extractDateRange(text) {
     var lower = text.toLowerCase();
     var now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
@@ -80,13 +80,13 @@ function extractDateRange(text) {
     }
 
     if (targetYear === null) {
-        targetYear = (targetMonth > cm) ? cy - 1 : cy; // Adjust for previous year if month has passed
+        targetYear = (targetMonth > cm) ? cy - 1 : cy; 
         if (targetMonth === -1) targetYear = cy;
     }
 
     var rangeMatch = lower.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s*(?:to|-|se)\s*(\d{1,2})\s*(?:st|nd|rd|th)?/);
     if (rangeMatch && targetMonth !== -1) {
-        return { from: toTS(targetYear, targetMonth, parseInt(rangeMatch[1])), to: toTS(targetYear, targetMonth, parseInt(rangeMatch[2]), 23, 59, 59), label: rangeMatch[1] + ' to ' + rangeMatch[2] + ' ' + monthFull[targetMonth].toUpperCase() + ' ' + targetYear };
+        return { from: toTS(targetYear, targetMonth, parseInt(rangeMatch[1])), to: toTS(targetYear, targetMonth, parseInt(rangeMatch[2]), 23, 59, 59), label: rangeMatch[1] + ' to ' + rangeMatch[2] + ' ' + monthFull[targetMonth].toUpperCase() + ' ' + targetYear, exactMonth: targetMonth };
     }
     if (rangeMatch && targetMonth === -1) {
         return { from: toTS(cy, cm, parseInt(rangeMatch[1])), to: toTS(cy, cm, parseInt(rangeMatch[2]), 23, 59, 59), label: rangeMatch[1] + ' to ' + rangeMatch[2] + ' ' + monthFull[cm].toUpperCase() + ' ' + cy };
@@ -99,17 +99,17 @@ function extractDateRange(text) {
         var tm = monthNames.indexOf(mStr);
         if (tm !== -1) {
             var y = yearMatch ? targetYear : (tm > cm ? cy - 1 : cy);
-            return { from: toTS(y, tm, day, 0, 0, 0), to: toTS(y, tm, day, 23, 59, 59), label: day + ' ' + monthFull[tm].toUpperCase() + ' ' + y };
+            return { from: toTS(y, tm, day, 0, 0, 0), to: toTS(y, tm, day, 23, 59, 59), label: day + ' ' + monthFull[tm].toUpperCase() + ' ' + y, exactMonth: tm };
         }
     }
 
     if (lower.includes('1st week') || lower.includes('first week') || lower.includes('pehla hafta') || lower.includes('week 1')) {
         var tm = targetMonth !== -1 ? targetMonth : cm;
-        return { from: toTS(targetYear, tm, 1), to: toTS(targetYear, tm, 7, 23, 59, 59), label: '1st Week of ' + monthFull[tm].toUpperCase() + ' ' + targetYear };
+        return { from: toTS(targetYear, tm, 1), to: toTS(targetYear, tm, 7, 23, 59, 59), label: '1st Week of ' + monthFull[tm].toUpperCase() + ' ' + targetYear, exactMonth: tm };
     }
 
     if (targetMonth !== -1) {
-        return { from: toTS(targetYear, targetMonth, 1), to: toTS(targetYear, targetMonth + 1, 0, 23, 59, 59), label: monthFull[targetMonth].toUpperCase() + ' ' + targetYear };
+        return { from: toTS(targetYear, targetMonth, 1), to: toTS(targetYear, targetMonth + 1, 0, 23, 59, 59), label: monthFull[targetMonth].toUpperCase() + ' ' + targetYear, exactMonth: targetMonth };
     }
     
     if (lower.match(/\btoday\b|\baaj\b/)) return { from: toTS(cy, cm, cd), to: toTS(cy, cm, cd, 23, 59, 59), label: 'Today' };
@@ -152,7 +152,6 @@ function parseDataQuery(text) {
 function isDateInRange(ts, dateRange) {
     if (!dateRange) return true; 
     if (ts <= 0) return false; 
-    // Strict Timestamp logic prevents overlap bugs
     return (ts >= dateRange.from && ts <= dateRange.to);
 }
 
@@ -374,7 +373,6 @@ function getCustomerReport(custName, invoiceMap, dateRange, lastOnly) {
     return msg;
 }
 
-// ✅ FULL UNRESTRICTED LEDGER ACCESS FOR AI FALLBACK
 function generateDeepBusinessSummary(allRows) {
     var custStats = {}; var monthStats = {}; var execStats = {}; var prodStats = {};
     for (var i=0; i<allRows.length; i++) {
@@ -407,7 +405,7 @@ function generateDeepBusinessSummary(allRows) {
     summary += "\n-- ALL SALES EXECUTIVES --\n";
     for(var e in execStats) { summary += "[EXEC] " + e + " -> Vol:" + execStats[e].vol.toFixed(1) + "L, Val:Rs." + execStats[e].val.toFixed(0) + "\n"; }
 
-    return summary.slice(0, 25000); 
+    return summary.slice(0, 100000); 
 }
 
 // ─── LOAD ALL DATA ─────────────────────────────────────────────────────────
@@ -476,6 +474,15 @@ module.exports = async function(req, res) {
         }
 
         // ── ADMIN COMMANDS ─────────────────────────────────────────────────
+        if (isAdmin && text.toLowerCase().indexOf('!ai ') === 0) { 
+            var aiQuery = text.slice(4).trim();
+            var adminAiPrompt = 'You are a helpful AI assistant for the admin. Answer the general knowledge or analytical query. If it is about the business, use the CONTEXT DATA. If it is a general world question, use your own knowledge. If you do not know, say "Bhai, iska jawab mujhe nahi pata." NO EMOJIS.';
+            var bizSummaryAdmin = generateDeepBusinessSummary(allRows);
+            var aiReplyAdmin = await getAIReply(aiQuery, bizSummaryAdmin, adminAiPrompt);
+            await sendText(from, aiReplyAdmin || "Bhai, iska jawab mujhe nahi pata."); 
+            return res.status(200).json({ status: 'ok' }); 
+        }
+
         if (isAdmin && text.indexOf('!setprompt ') === 0)  { await saveSystemPrompt(text.slice(11).trim()); await sendText(from, 'Prompt update ho gaya!'); return res.status(200).json({ status: 'ok' }); }
         if (isAdmin && text === '!status')  { await sendText(from, '*Bot Status*\nOnline'); return res.status(200).json({ status: 'ok' }); }
         if (isAdmin && text === '!clearcache') { globalCache = null; await sendText(from, 'Cache cleared!'); return res.status(200).json({ status: 'ok' }); }
@@ -498,7 +505,7 @@ module.exports = async function(req, res) {
         if (lower.match(/top.*(cust|coust|party|log|client|dukandar|dukan)/) || lower.match(/(highest|zyada|sabse).*(cust|coust)/)) qIntent.type = 'top_customers';
         else if (lower.match(/top.*(prod|item|oil|brand|maal)/) || lower.match(/(highest|zyada|sabse).*prod/)) qIntent.type = 'top_products';
         else if (lower.match(/\b(se|se wise|executive|exec|salesman)\b/)) qIntent.type = 'executive_report';
-        else if (lower.match(/\b(total volume|sales summary|kitna bika|total sale)\b/)) qIntent.type = 'period_summary';
+        else if (lower.match(/\b(total volume|sales summary|kitna bika|total sale)\b/) || (lower.includes('volume') && lower.match(/\b(month|mahine|week|hafte|din|aaj)\b/))) qIntent.type = 'period_summary';
 
         if (qIntent.type) {
             var autoDate = false;
@@ -570,7 +577,7 @@ module.exports = async function(req, res) {
             }
         }
 
-        // ── 4. AI DATA ANALYST FALLBACK ──
+        // ── 4. AI DATA ANALYST FALLBACK (For custom questions like "lowest selling") ──
         var isCustomAnalytics = ['sabse', 'kam', 'lowest', 'low', 'aaj', 'kal', 'din', 'bika', 'invoice', 'bill', 'hisab'].some(function(w){return lower.includes(w);});
 
         if (isCustomAnalytics) {
