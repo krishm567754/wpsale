@@ -28,6 +28,7 @@ async function isWhitelistActive() {
     try { var s = await d.ref('botConfig/whitelistActive').get(); return s.exists() ? s.val() : false; } catch(e) { return false; }
 }
 async function setWhitelistActive(val) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/whitelistActive').set(val); } catch(e){} } }
+
 async function getAllowedNumbers() {
     var d = getFirebase(); if (!d) return {};
     try { var s = await d.ref('botConfig/allowedNumbers').get(); return s.exists() ? s.val() : {}; } catch(e) { return {}; }
@@ -214,32 +215,18 @@ function loadPriceListFromExcel(wb) {
     return priceMap;
 }
 
-// ─── STRICT PRODUCT SEARCH ──────────────────────────────────────────────────
+// ─── PRODUCT SEARCH ────────────────────────────────────────────────────────
 function searchProducts(query, mrpMap, dlpMap) {
-    if (query.startsWith('!')) return []; // Command ko product nahi manega
     var q = query.toLowerCase().replace(/[^a-z0-9]/g, ' ');
     var stopWords = ['price','rate','mrp','dlp','kya','hai','batao','aur','ka','ke','liye','ye','pucha','list'];
-    
-    // FIX: Only match words that are at least 3 characters long (no 'ai', 'ok', etc.)
-    var searchTerms = q.split(/\s+/).filter(function(w){ return w.length > 2 && stopWords.indexOf(w) === -1; });
+    var searchTerms = q.split(/\s+/).filter(function(w){ return w.length > 1 && stopWords.indexOf(w) === -1; });
     if (searchTerms.length === 0) return [];
-    
     var combined = {};
     for (var mName in mrpMap) { var norm = mName.toLowerCase().replace(/[^a-z0-9]/g, ''); if (!combined[norm]) combined[norm] = { orig: mName, sizes: {} }; for (var sz in mrpMap[mName]) { if (!combined[norm].sizes[sz]) combined[norm].sizes[sz] = {}; combined[norm].sizes[sz].mrp = mrpMap[mName][sz]; } }
     for (var dName in dlpMap) { var normD = dName.toLowerCase().replace(/[^a-z0-9]/g, ''); if (!combined[normD]) combined[normD] = { orig: dName, sizes: {} }; for (var sz in dlpMap[dName]) { if (!combined[normD].sizes[sz]) combined[normD].sizes[sz] = {}; combined[normD].sizes[sz].dlp = dlpMap[dName][sz]; } }
-    
     var products = [];
-    for (var key in combined) { 
-        var score = 0; 
-        for (var t = 0; t < searchTerms.length; t++) { if (key.indexOf(searchTerms[t]) !== -1) score++; } 
-        if (score >= Math.min(2, Math.max(1, searchTerms.length - 1))) { 
-            var pData = combined[key]; var chunk = 'Product: ' + pData.orig + '\n'; var hasData = false; 
-            for (var sz in pData.sizes) { chunk += '- Size [' + sz + '] : MRP Rs. ' + (pData.sizes[sz].mrp || 'N/A') + ' | DLP Rs. ' + (pData.sizes[sz].dlp || 'N/A') + '\n'; hasData = true; } 
-            if (hasData) products.push({ name: pData.orig, score: score, chunk: chunk }); 
-        } 
-    }
-    products.sort(function(a,b){ return b.score - a.score; }); 
-    return products.slice(0, 5);
+    for (var key in combined) { var score = 0; for (var t = 0; t < searchTerms.length; t++) { if (key.indexOf(searchTerms[t]) !== -1) score++; } if (score >= Math.min(2, Math.max(1, searchTerms.length - 1))) { var pData = combined[key]; var chunk = 'Product: ' + pData.orig + '\n'; var hasData = false; for (var sz in pData.sizes) { chunk += '- Size [' + sz + '] : MRP Rs. ' + (pData.sizes[sz].mrp || 'N/A') + ' | DLP Rs. ' + (pData.sizes[sz].dlp || 'N/A') + '\n'; hasData = true; } if (hasData) products.push({ name: pData.orig, score: score, chunk: chunk }); } }
+    products.sort(function(a,b){ return b.score - a.score; }); return products.slice(0, 5);
 }
 
 function searchInvoices(query, invoiceMap) {
@@ -519,12 +506,12 @@ module.exports = async function(req, res) {
         var text = ((body.data.message&&body.data.message.conversation)||(body.data.message&&body.data.message.extendedTextMessage&&body.data.message.extendedTextMessage.text)||'').trim();
         if (!text||!from) return res.status(200).send('Empty');
 
-        // ✅ FIXED DEFAULT ADMIN NUMBER
-        var adminNum = process.env.ADMIN_NUMBER || '919468940057';
+        var envAdmin = process.env.ADMIN_NUMBER || '919468940057';
         var pureNumber = from.split('@')[0];
         var safeFrom = sanitizePath(from);
         var database = getFirebase();
 
+        // Load all configs and data at once
         var results = await Promise.all([getSystemPrompt(), loadAllData(), getPDFList(), isWhitelistActive(), getAllowedNumbers(), getBotSettings(), getAdmins()]);
         var sysPrompt = results[0]; var dataResult = results[1]||{}; var savedPDFs = results[2];
         var wlActive = results[3]; var allowedNums = results[4]; var settings = results[5]; var adminDict = results[6];
@@ -532,7 +519,7 @@ module.exports = async function(req, res) {
         var invoiceMap = dataResult.invoiceMap || {}; var mrpMap = dataResult.mrpMap || {}; var dlpMap = dataResult.dlpMap || {}; var allRows = dataResult.allRows || [];
 
         // Check if user is Admin
-        var isAdmin = (pureNumber === adminNum) || adminDict[pureNumber];
+        var isAdmin = (pureNumber === envAdmin) || adminDict[pureNumber];
 
         // ── 🚨 GLOBAL BOT TOGGLE 🚨 ──
         if (!settings.botEnabled && !isAdmin) {
@@ -543,6 +530,34 @@ module.exports = async function(req, res) {
         if (!isAdmin && wlActive && !allowedNums[pureNumber]) {
             console.log('[WHITELIST] Blocked: ' + pureNumber);
             return res.status(200).send('Blocked by Whitelist'); 
+        }
+
+        // ── PENDING SELECTION (Options Menu) ──────────────────────────────────
+        if (/^\d+$/.test(text)) {
+            var pending = null;
+            try { var snap = await database.ref('pending/' + safeFrom).get(); if(snap.exists()) pending = snap.val(); } catch(e){}
+            if (!pending && memoryPending[safeFrom]) pending = memoryPending[safeFrom];
+            
+            if (pending && pending.matches) {
+                var idx = parseInt(text) - 1;
+                if (idx >= 0 && idx < pending.matches.length) {
+                    if (pending.type === 'invoice') { var m = pending.matches[idx]; var f = m.rows[0]; var prods = m.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG = m.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl = m.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m.invNo+'\n*Customer:* '+f['Customer Name']+'\n*Products:* '+prods+'\n*Total Value:* Rs.'+tG.toFixed(2)+'\n*Total Volume:* '+vl.toFixed(1)+' L\n*Date:* '+cleanDate(f['Invoice Date'])+'\n*Payment:* '+f['Mode Of Payement']); } 
+                    else if (pending.type === 'product') { 
+                        var p = pending.matches[idx]; 
+                        var aiPrompt = 'User Query: "'+pending.originalQuery+'"\nSelected: '+p.name+'\n\nRULES:\n1. Match EXACT size requested (1ltr=1L).\n2. CRITICAL: DO NOT divide or calculate prices. Just extract from data.\n3. If size not listed, say EXACTLY: "Bhai, is product ka ye size price list mein nahi hai."';
+                        var aiR = await getAIReply(aiPrompt, '[PRICE DATA]\n'+p.chunk, sysPrompt); 
+                        await sendText(from, aiR || 'Data nahi mila.'); 
+                    }
+                    else if (pending.type === 'customer_report') { var cReport = getCustomerReport(pending.matches[idx].name, invoiceMap, pending.dateRange, pending.lastOnly); await sendText(from, cReport); }
+                    
+                    try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
+                    delete memoryPending[safeFrom];
+                    return res.status(200).json({ status: 'ok' });
+                } else {
+                    try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
+                    delete memoryPending[safeFrom];
+                }
+            }
         }
 
         var lower = text.toLowerCase();
@@ -579,58 +594,20 @@ module.exports = async function(req, res) {
                 await sendText(from, cMsg); 
                 return res.status(200).json({ status: 'ok' });
             }
-            
-            // ✅ ADMIN AI COMMAND (Supports both !ask and !ai)
-            if (lower.startsWith('!ask ') || lower.startsWith('!ai ')) {
-                var aiQuery = lower.startsWith('!ask ') ? text.slice(5).trim() : text.slice(4).trim();
-                var adminAiPrompt = 'You are a helpful AI assistant for the admin. Answer the general knowledge or analytical query. If it is about the business, use the CONTEXT DATA. If it is a general world question, use your own knowledge. If you do not know, say "Bhai, iska jawab mujhe nahi pata." NO EMOJIS.';
-                var bizSummaryAdmin = generateDeepBusinessSummary(allRows);
-                var aiReplyAdmin = await getAIReply(aiQuery, bizSummaryAdmin, adminAiPrompt);
-                await sendText(from, aiReplyAdmin || "Bhai, iska jawab mujhe nahi pata."); 
-                return res.status(200).json({ status: 'ok' }); 
-            }
-        } else {
-            // Check Public !ask command
-            if (lower.startsWith('!ask ')) {
-                if (!settings.aiEnabled) {
-                    await sendText(from, "❌ Bhai, AI features abhi admin dvara disable kiye gaye hain.");
-                    return res.status(200).json({ status: 'ok' });
-                }
-                var publicAiQuery = text.slice(5).trim();
-                var publicAiPrompt = 'You are Krish, a helpful assistant. Answer the user query using the CONTEXT DATA if related to business, otherwise answer from general knowledge. If you do not know, say "Bhai, iska jawab mujhe nahi pata." NO EMOJIS.';
-                var bizSummaryAI = generateDeepBusinessSummary(allRows);
-                var aiReplyText = await getAIReply(publicAiQuery, bizSummaryAI, publicAiPrompt);
-                await sendText(from, aiReplyText || "Bhai, iska jawab mujhe nahi pata."); 
-                return res.status(200).json({ status: 'ok' });
-            }
         }
 
-        // ── PENDING SELECTION (Options Menu) ──────────────────────────────────
-        if (/^\d+$/.test(text)) {
-            var pending = null;
-            try { var snap = await database.ref('pending/' + safeFrom).get(); if(snap.exists()) pending = snap.val(); } catch(e){}
-            if (!pending && memoryPending[safeFrom]) pending = memoryPending[safeFrom];
-            
-            if (pending && pending.matches) {
-                var idx = parseInt(text) - 1;
-                if (idx >= 0 && idx < pending.matches.length) {
-                    if (pending.type === 'invoice') { var m = pending.matches[idx]; var f = m.rows[0]; var prods = m.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG = m.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl = m.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m.invNo+'\n*Customer:* '+f['Customer Name']+'\n*Products:* '+prods+'\n*Total Value:* Rs.'+tG.toFixed(2)+'\n*Total Volume:* '+vl.toFixed(1)+' L\n*Date:* '+cleanDate(f['Invoice Date'])+'\n*Payment:* '+f['Mode Of Payement']); } 
-                    else if (pending.type === 'product') { 
-                        var p = pending.matches[idx]; 
-                        var aiPrompt = 'User Query: "'+pending.originalQuery+'"\nSelected: '+p.name+'\n\nRULES:\n1. Match EXACT size requested (1ltr=1L).\n2. CRITICAL: DO NOT divide or calculate prices. Just extract from data.\n3. If size not listed, say EXACTLY: "Bhai, is product ka ye size price list mein nahi hai."';
-                        var aiR = await getAIReply(aiPrompt, '[PRICE DATA]\n'+p.chunk, sysPrompt); 
-                        await sendText(from, aiR || 'Data nahi mila.'); 
-                    }
-                    else if (pending.type === 'customer_report') { var cReport = getCustomerReport(pending.matches[idx].name, invoiceMap, pending.dateRange, pending.lastOnly); await sendText(from, cReport); }
-                    
-                    try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
-                    delete memoryPending[safeFrom];
-                    return res.status(200).json({ status: 'ok' });
-                } else {
-                    try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
-                    delete memoryPending[safeFrom];
-                }
+        // ── 🌍 THE PUBLIC `!ASK` COMMAND (WITH TOGGLE) ─────────────────────
+        if (lower.startsWith('!ask ')) {
+            if (!settings.aiEnabled && !isAdmin) {
+                await sendText(from, "❌ Bhai, AI features abhi admin dvara disable kiye gaye hain.");
+                return res.status(200).json({ status: 'ok' });
             }
+            var publicAiQuery = text.slice(5).trim();
+            var publicAiPrompt = 'You are Krish, a helpful assistant. Answer the user query using the CONTEXT DATA if related to business, otherwise answer from general knowledge. If you do not know, say "Bhai, iska jawab mujhe nahi pata." NO EMOJIS.';
+            var bizSummaryAI = generateDeepBusinessSummary(allRows);
+            var aiReplyText = await getAIReply(publicAiQuery, bizSummaryAI, publicAiPrompt);
+            await sendText(from, aiReplyText || "Bhai, iska jawab mujhe nahi pata."); 
+            return res.status(200).json({ status: 'ok' });
         }
 
         // ── GREETING ───────────────────────────────────────────────────────
@@ -654,6 +631,7 @@ module.exports = async function(req, res) {
 
         if (qIntent.type) {
             var autoDate = false;
+            // Set Default Month ONLY IF date is missing
             if (!qIntent.filters.dateRange) {
                 var now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
                 var cy = now.getFullYear(); var cm = now.getMonth();
@@ -671,6 +649,7 @@ module.exports = async function(req, res) {
             else if (qIntent.type === 'executive_report') resultText = getExecutiveReport(invoiceMap, qIntent.filters.dateRange);
             else if (qIntent.type === 'period_summary') resultText = getPeriodSummary(invoiceMap, qIntent.filters.dateRange);
 
+            // Fallback: If no data in Current Month, fetch ALL TIME.
             if (autoDate && resultText === 'NO_DATA') {
                 if (qIntent.type === 'top_customers') resultText = "*(Current Month me data nahi mila. All-Time data de raha hu)*\n\n" + getTopCustomers(invoiceMap, null, qIntent.limit);
                 else if (qIntent.type === 'top_products') resultText = "*(Current Month me data nahi mila. All-Time data de raha hu)*\n\n" + getTopProducts(allRows, null, qIntent.limit);
@@ -687,6 +666,9 @@ module.exports = async function(req, res) {
         }
 
         // ── 2. PRICE & INVOICE SEARCH ──────────
+        // FIX: Ignore price/invoice search if command like ! is used
+        if (text.startsWith('!')) return res.status(200).send('Command ignored by price search');
+
         var isRateQ = ['rate','price','mrp','dlp','kitne ka','dam','rupay'].some(function(w){return lower.includes(w);});
         var prodMatches = searchProducts(text, mrpMap, dlpMap); 
         var invMatches  = searchInvoices(text, invoiceMap); 
