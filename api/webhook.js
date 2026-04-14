@@ -22,6 +22,31 @@ function getFirebase() {
 
 function sanitizePath(str) { return str.replace(/[@.\[\]#\$\/]/g, '_'); }
 
+// ─── SETTINGS, WHITELIST & ADMINS ──────────────────────────────────────────
+async function isWhitelistActive() {
+    var d = getFirebase(); if (!d) return false;
+    try { var s = await d.ref('botConfig/whitelistActive').get(); return s.exists() ? s.val() : false; } catch(e) { return false; }
+}
+async function setWhitelistActive(val) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/whitelistActive').set(val); } catch(e){} } }
+async function getAllowedNumbers() {
+    var d = getFirebase(); if (!d) return {};
+    try { var s = await d.ref('botConfig/allowedNumbers').get(); return s.exists() ? s.val() : {}; } catch(e) { return {}; }
+}
+async function allowNumber(num) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/allowedNumbers/' + num).set(true); } catch(e){} } }
+async function blockNumber(num) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/allowedNumbers/' + num).remove(); } catch(e){} } }
+
+async function getBotSettings() {
+    var d = getFirebase(); if (!d) return { botEnabled: true, aiEnabled: true };
+    try { var s = await d.ref('botConfig/settings').get(); return s.exists() ? s.val() : { botEnabled: true, aiEnabled: true }; } catch(e) { return { botEnabled: true, aiEnabled: true }; }
+}
+async function updateBotSetting(key, val) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/settings/' + key).set(val); } catch(e){} } }
+
+async function getAdmins() {
+    var d = getFirebase(); if (!d) return {};
+    try { var s = await d.ref('botConfig/admins').get(); return s.exists() ? s.val() : {}; } catch(e) { return {}; }
+}
+async function addAdminNumber(num) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/admins/' + num).set(true); } catch(e){} } }
+
 async function getSystemPrompt() {
     var d = getFirebase();
     var def = 'Tu Krish hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf CONTEXT DATA se jawab de. Kuch bhi invent mat kar.\n2. 0.9L aur 900ml dono same hote hain.\n3. Exact Size ki value batayein jo user ne puchi hai.\n4. Format: *Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n5. Text Hinglish me rakho.\n6. Emojis ya special symbols bilkul use mat karo. Rupee sign ki jagah sirf "Rs." likho.\n7. Agar answer CONTEXT DATA me clearly nahi milta to exactly likho: "Please wait, admin will reply soon."';
@@ -58,7 +83,7 @@ function cleanDate(val) {
     return String(dt.getDate()).padStart(2,'0') + '/' + String(dt.getMonth()+1).padStart(2,'0') + '/' + dt.getFullYear();
 }
 
-// ─── ROBUST DATE EXTRACTOR (With ADVANCED Range & Year Match) ───────────────
+// ─── ROBUST DATE EXTRACTOR ───────────────────────────────────
 function extractDateRange(text) {
     var lower = text.toLowerCase();
     var now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
@@ -69,64 +94,67 @@ function extractDateRange(text) {
     var monthNames = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
     var monthFull = ['january','february','march','april','may','june','july','august','september','october','november','december'];
     
-    var getMonthIdx = function(str) {
-        for (var i=0; i<12; i++) {
-            if (str.includes(monthNames[i])) return i;
-        }
-        return -1;
-    };
-
     var yearMatch = lower.match(/\b(202\d)\b/);
-    var targetYear = yearMatch ? parseInt(yearMatch[1]) : cy;
+    var targetYear = yearMatch ? parseInt(yearMatch[1]) : null;
 
-    // 1. Range match: "1 april se 5 april" OR "1 april to 5 may"
-    var r1 = lower.match(/(\d{1,2})\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(?:to|-|se|tak|till)\s*(\d{1,2})\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*/);
-    if (r1) {
-        var m1 = getMonthIdx(r1[2]), m2 = getMonthIdx(r1[4]);
-        return { from: toTS(targetYear, m1, parseInt(r1[1])), to: toTS(targetYear, m2, parseInt(r1[3]), 23, 59, 59), label: r1[1] + ' ' + monthFull[m1].toUpperCase() + ' to ' + r1[3] + ' ' + monthFull[m2].toUpperCase() + ' ' + targetYear };
-    }
-
-    // 2. Range match: "1 to 5 april" OR "1 se 5 april"
-    var r2 = lower.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s*(?:to|-|se|tak|till)\s*(\d{1,2})\s*(?:st|nd|rd|th)?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*/);
-    if (r2) {
-        var mIdx = getMonthIdx(r2[3]);
-        return { from: toTS(targetYear, mIdx, parseInt(r2[1])), to: toTS(targetYear, mIdx, parseInt(r2[2]), 23, 59, 59), label: r2[1] + ' to ' + r2[2] + ' ' + monthFull[mIdx].toUpperCase() + ' ' + targetYear };
-    }
-
-    // 3. Specific Single Date (e.g. 3 april, 1 april)
-    var r3 = lower.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*/);
-    if (r3) {
-        var mIdx = getMonthIdx(r3[2]);
-        if (mIdx !== -1) {
-            return { from: toTS(targetYear, mIdx, parseInt(r3[1]), 0, 0, 0), to: toTS(targetYear, mIdx, parseInt(r3[1]), 23, 59, 59), label: r3[1] + ' ' + monthFull[mIdx].toUpperCase() + ' ' + targetYear };
+    var targetMonth = -1;
+    for(var i=0; i<12; i++){
+        if(lower.match(new RegExp("\\b" + monthFull[i] + "\\b")) || lower.match(new RegExp("\\b" + monthNames[i] + "\\b"))) {
+            targetMonth = i; break;
         }
     }
 
-    // 4. Specific Month (e.g. March 2026, April)
-    var targetMonth = getMonthIdx(lower);
+    if (targetYear === null) {
+        targetYear = (targetMonth > cm) ? cy - 1 : cy; 
+        if (targetMonth === -1) targetYear = cy;
+    }
+
+    var rangeMatch = lower.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s*(?:to|-|se)\s*(\d{1,2})\s*(?:st|nd|rd|th)?/);
+    if (rangeMatch && targetMonth !== -1) {
+        return { from: toTS(targetYear, targetMonth, parseInt(rangeMatch[1])), to: toTS(targetYear, targetMonth, parseInt(rangeMatch[2]), 23, 59, 59), label: rangeMatch[1] + ' to ' + rangeMatch[2] + ' ' + monthFull[targetMonth].toUpperCase() + ' ' + targetYear, exactMonth: targetMonth };
+    }
+    if (rangeMatch && targetMonth === -1) {
+        return { from: toTS(cy, cm, parseInt(rangeMatch[1])), to: toTS(cy, cm, parseInt(rangeMatch[2]), 23, 59, 59), label: rangeMatch[1] + ' to ' + rangeMatch[2] + ' ' + monthFull[cm].toUpperCase() + ' ' + cy };
+    }
+
+    var singleDateMatch = lower.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*/);
+    if (singleDateMatch) {
+        var day = parseInt(singleDateMatch[1]);
+        var mStr = singleDateMatch[2];
+        var tm = monthNames.indexOf(mStr);
+        if (tm !== -1) {
+            var y = yearMatch ? targetYear : (tm > cm ? cy - 1 : cy);
+            return { from: toTS(y, tm, day, 0, 0, 0), to: toTS(y, tm, day, 23, 59, 59), label: day + ' ' + monthFull[tm].toUpperCase() + ' ' + y, exactMonth: tm };
+        }
+    }
+
+    if (lower.includes('1st week') || lower.includes('first week') || lower.includes('pehla hafta') || lower.includes('week 1')) {
+        var tm = targetMonth !== -1 ? targetMonth : cm;
+        return { from: toTS(targetYear, tm, 1), to: toTS(targetYear, tm, 7, 23, 59, 59), label: '1st Week of ' + monthFull[tm].toUpperCase() + ' ' + targetYear, exactMonth: tm };
+    }
+
     if (targetMonth !== -1) {
-        // Did they ask for the first week of this month?
-        if (lower.includes('1st week') || lower.includes('first week') || lower.includes('pehla hafta') || lower.includes('week 1')) {
-            return { from: toTS(targetYear, targetMonth, 1), to: toTS(targetYear, targetMonth, 7, 23, 59, 59), label: '1st Week of ' + monthFull[targetMonth].toUpperCase() + ' ' + targetYear };
-        }
-        // Otherwise just give the whole month
-        return { from: toTS(targetYear, targetMonth, 1), to: toTS(targetYear, targetMonth + 1, 0, 23, 59, 59), label: monthFull[targetMonth].toUpperCase() + ' ' + targetYear };
+        return { from: toTS(targetYear, targetMonth, 1), to: toTS(targetYear, targetMonth + 1, 0, 23, 59, 59), label: monthFull[targetMonth].toUpperCase() + ' ' + targetYear, exactMonth: targetMonth };
     }
-
-    // 5. General Relative Times
-    var d = now.getDay() === 0 ? 6 : now.getDay() - 1; // Mon=0
+    
     if (lower.match(/\btoday\b|\baaj\b/)) return { from: toTS(cy, cm, cd), to: toTS(cy, cm, cd, 23, 59, 59), label: 'Today' };
     if (lower.match(/\byesterday\b|\bkal\b/)) return { from: toTS(cy, cm, cd - 1), to: toTS(cy, cm, cd - 1, 23, 59, 59), label: 'Yesterday' };
-    if (lower.match(/\bthis\s*week\b|\bis\s*hafte\b|\bchalu\s*hafte\b/)) return { from: toTS(cy, cm, cd - d), to: toTS(cy, cm, cd + (6 - d), 23, 59, 59), label: 'This Week' };
-    if (lower.match(/\blast\s*week\b|\bpichla\s*hafte\b|\bpichhle\s*hafte\b|\bprevious\s*week\b/)) return { from: toTS(cy, cm, cd - d - 7), to: toTS(cy, cm, cd - d - 1, 23, 59, 59), label: 'Last Week' };
-    if (lower.match(/\bnext\s*week\b|\bagla\s*hafte\b|\bagle\s*hafte\b/)) return { from: toTS(cy, cm, cd - d + 7), to: toTS(cy, cm, cd - d + 13, 23, 59, 59), label: 'Next Week' };
-    if (lower.match(/\bthis\s*month\b|\bis\s*mahine\b|\bchalu\s*mahine\b/)) return { from: toTS(cy, cm, 1), to: toTS(cy, cm + 1, 0, 23, 59, 59), label: 'This Month' };
+    if (lower.match(/\bthis\s*week\b|\bis\s*hafte\b|\bchalu\s*hafte\b/)) {
+        var d = now.getDay() === 0 ? 6 : now.getDay() - 1;
+        return { from: toTS(cy, cm, cd - d), to: toTS(cy, cm, cd + (6 - d), 23, 59, 59), label: 'This Week' };
+    }
+    if (lower.match(/\blast\s*week\b|\bpichla\s*hafte\b|\bpichhle\s*hafte\b|\bprevious\s*week\b/)) {
+        var d2 = now.getDay() === 0 ? 6 : now.getDay() - 1;
+        return { from: toTS(cy, cm, cd - d2 - 7), to: toTS(cy, cm, cd - d2 - 1, 23, 59, 59), label: 'Last Week' };
+    }
+    if (lower.match(/\bthis\s*month\b|\bis\s*mahine\b|\bchalu\s*mahine\b/)) {
+        return { from: toTS(cy, cm, 1), to: toTS(cy, cm + 1, 0, 23, 59, 59), label: 'This Month' };
+    }
     if (lower.match(/\blast\s*month\b|\bpichla\s*mahine\b|\bprevious\s*month\b/)) {
         var lm = cm === 0 ? 11 : cm - 1;
         var ly = cm === 0 ? cy - 1 : cy;
         return { from: toTS(ly, lm, 1), to: toTS(ly, lm + 1, 0, 23, 59, 59), label: 'Last Month' };
     }
-    
     return null;
 }
 
@@ -149,6 +177,10 @@ function parseDataQuery(text) {
 function isDateInRange(ts, dateRange) {
     if (!dateRange) return true; 
     if (ts <= 0) return false; 
+    if (dateRange.exactMonth !== undefined) {
+        var d = new Date(ts);
+        if (d.getMonth() === dateRange.exactMonth) return true;
+    }
     return (ts >= dateRange.from && ts <= dateRange.to);
 }
 
@@ -198,16 +230,32 @@ function searchProducts(query, mrpMap, dlpMap) {
 
 function searchInvoices(query, invoiceMap) {
     var q = query.replace(/[^a-zA-Z0-9\/\- ]/g, '').toLowerCase().trim();
-    if (/^\d{1,2}$/.test(q) || q.length < 3) return [];
-    var matches = []; var userKeywords = q.split(' ').filter(function(w){ return w.length > 3; }); if (userKeywords.length === 0) userKeywords = [q];
+    if (q.length < 3 && !/^\d+$/.test(q.replace(/\s+/g,''))) return [];
+    var matches = []; var userKeywords = q.split(' ').filter(function(w){ return w.length > 2; }); if (userKeywords.length === 0) userKeywords = [q];
+    var qClean = q.replace(/[^a-z0-9]/g, ''); 
+    if (!qClean) return [];
+
     for (var invNo in invoiceMap) { 
         var rows = invoiceMap[invNo]; 
-        var custName = (rows[0]['Customer Name'] || '').toLowerCase(); 
+        var custName = (rows[0]['Customer Name'] || '').toLowerCase().replace(/[^a-z0-9 ]/g, ''); 
         var invClean = invNo.replace(/[^a-zA-Z0-9]/g, '').toLowerCase(); 
-        var qClean = q.replace(/[^a-zA-Z0-9]/g, ''); 
-        var matchInv = invClean.indexOf(qClean) !== -1 || qClean.indexOf(invClean) !== -1; 
-        var keywordScore = userKeywords.filter(function(k){ return custName.indexOf(k) !== -1; }).length; 
-        if (matchInv || keywordScore > 0) matches.push({ invNo: invNo, rows: rows, customer: rows[0]['Customer Name'], score: matchInv ? 10 : keywordScore }); 
+        
+        var exactMatch = (invClean === qClean);
+        var endsWithMatch = invClean.endsWith(qClean);
+        var matchInv = (invClean.indexOf(qClean) !== -1); 
+        
+        var keywordScore = 0;
+        if (custName === qClean) keywordScore += 1000;
+        else if (custName.startsWith(qClean)) keywordScore += 500;
+        else if (custName.indexOf(qClean) !== -1) keywordScore += 100;
+        else { userKeywords.forEach(function(k){ if (custName.indexOf(k) !== -1) keywordScore += 10; }); }
+        
+        var score = keywordScore;
+        if (exactMatch) score += 5000;
+        else if (endsWithMatch && /^\d+$/.test(qClean)) score += 3000; 
+        else if (matchInv) score += 2000;
+        
+        if (score > 0) matches.push({ invNo: invNo, rows: rows, customer: rows[0]['Customer Name'], score: score }); 
     }
     matches.sort(function(a,b){ return b.score - a.score; }); return matches.slice(0, 5);
 }
@@ -215,17 +263,22 @@ function searchInvoices(query, invoiceMap) {
 function searchCustomers(query, invoiceMap) {
     var lower = query.toLowerCase();
     var custStop = ['ka','ki','ke','ko','ne','liya','batao','dikhao','data','report','invoice','bill','total','volume','wale','wali','mahine','month','week','hafte','is','this','last','pichle','aaj','today','all','sab','poora','maal','liter','l','hisab','kitna','sale','bika'];
-    var cleanQuery = lower.replace(new RegExp('\\b(' + custStop.join('|') + ')\\b', 'g'), ' ').trim();
+    var cleanQuery = lower.replace(new RegExp('\\b(' + custStop.join('|') + ')\\b', 'g'), ' ').replace(/[^a-z0-9 ]/g, '').trim();
     if (cleanQuery.length < 3) return [];
     
     var custSet = {}; for (var inv in invoiceMap) { var c = invoiceMap[inv][0]['Customer Name']; if (c) custSet[c] = true; }
     var matches = [];
     for (var c in custSet) {
-        var cLower = c.toLowerCase(); var score = 0;
-        if (cLower === cleanQuery) score = 100;
-        else if (cLower.indexOf(cleanQuery) !== -1) score = 50;
-        else if (cleanQuery.indexOf(cLower) !== -1) score = 30;
-        else { var words = cleanQuery.split(/\s+/); for (var w = 0; w < words.length; w++) { if (words[w].length >= 3 && cLower.indexOf(words[w]) !== -1) score += 10; } }
+        var cLower = c.toLowerCase().replace(/[^a-z0-9 ]/g, ''); 
+        var score = 0;
+        if (cLower === cleanQuery) score = 1000;
+        else if (cLower.startsWith(cleanQuery)) score = 500;
+        else if (cLower.indexOf(cleanQuery) !== -1) score = 100;
+        else { 
+            var words = cleanQuery.split(/\s+/); var matchedWords = 0;
+            for (var w = 0; w < words.length; w++) { if (words[w].length >= 3 && cLower.indexOf(words[w]) !== -1) { score += 10; matchedWords++; } }
+            if (matchedWords === 0) score = 0;
+        }
         if (score > 0) matches.push({ name: c, score: score });
     }
     matches.sort(function(a,b){ return b.score - a.score; });
@@ -289,8 +342,11 @@ function getTopProducts(allRows, dateRange, limit) {
     return msg.trim();
 }
 
+// ✅ SE WISE REPORT WITH GRAND TOTAL
 function getExecutiveReport(invoiceMap, dateRange) {
     var execMap = {}; 
+    var grandVol = 0, grandVal = 0, grandCount = 0;
+    
     for (var inv in invoiceMap) { 
         var rows = invoiceMap[inv]; 
         var ts = getTimestamp(rows[0]['Invoice Date']);
@@ -301,10 +357,15 @@ function getExecutiveReport(invoiceMap, dateRange) {
         if (!execMap[exec]) execMap[exec] = { vol: 0, val: 0, count: 0 }; 
         
         rows.forEach(function(r){ 
-            execMap[exec].vol += parseFloat(r['Product Volume'])||0; 
-            execMap[exec].val += parseFloat(r['Total Value incl VAT/GST'])||0; 
+            var v = parseFloat(r['Product Volume'])||0;
+            var val = parseFloat(r['Total Value incl VAT/GST'])||0;
+            execMap[exec].vol += v; 
+            execMap[exec].val += val; 
+            grandVol += v;
+            grandVal += val;
         }); 
         execMap[exec].count++; 
+        grandCount++;
     }
     var keys = Object.keys(execMap);
     if (keys.length === 0) return 'NO_DATA'; 
@@ -312,10 +373,16 @@ function getExecutiveReport(invoiceMap, dateRange) {
     var msg = '*Sales Executive-wise Volume*\n';
     if (dateRange && dateRange.label) msg += '*Period:* ' + dateRange.label + '\n';
     msg += '\n';
+    
     keys.sort(function(a,b){return execMap[b].vol - execMap[a].vol;}).forEach(function(exec){ 
         var s = execMap[exec]; 
         msg += '*' + exec + '*\n   Vol: ' + s.vol.toFixed(1) + 'L | Val: Rs.' + s.val.toFixed(0) + ' | Bills: ' + s.count + '\n\n'; 
     }); 
+    
+    msg += '----------------------\n';
+    msg += '*📌 Grand Total*\n';
+    msg += 'Vol: ' + grandVol.toFixed(1) + 'L | Val: Rs.' + grandVal.toFixed(0) + ' | Bills: ' + grandCount;
+    
     return msg.trim();
 }
 
@@ -441,16 +508,34 @@ module.exports = async function(req, res) {
         var text = ((body.data.message&&body.data.message.conversation)||(body.data.message&&body.data.message.extendedTextMessage&&body.data.message.extendedTextMessage.text)||'').trim();
         if (!text||!from) return res.status(200).send('Empty');
 
-        var adminNum = process.env.ADMIN_NUMBER || '919950858818';
-        var isAdmin  = from.indexOf(adminNum) !== -1;
+        var envAdmin = process.env.ADMIN_NUMBER || '919950858818';
+        var pureNumber = from.split('@')[0];
         var safeFrom = sanitizePath(from);
         var database = getFirebase();
 
-        var results = await Promise.all([getSystemPrompt(), loadAllData(), getPDFList()]);
+        // Load all configs and data at once
+        var results = await Promise.all([getSystemPrompt(), loadAllData(), getPDFList(), isWhitelistActive(), getAllowedNumbers(), getBotSettings(), getAdmins()]);
         var sysPrompt = results[0]; var dataResult = results[1]||{}; var savedPDFs = results[2];
+        var wlActive = results[3]; var allowedNums = results[4]; var settings = results[5]; var adminDict = results[6];
+        
         var invoiceMap = dataResult.invoiceMap || {}; var mrpMap = dataResult.mrpMap || {}; var dlpMap = dataResult.dlpMap || {}; var allRows = dataResult.allRows || [];
 
-        // ── PENDING SELECTION ──────────────────────────────────────────────
+        // Check if user is Admin
+        var isAdmin = (pureNumber === envAdmin) || adminDict[pureNumber];
+
+        // ── 🚨 GLOBAL BOT TOGGLE 🚨 ──
+        if (!settings.botEnabled && !isAdmin) {
+            // If bot is turned off, ignore everyone except Admins.
+            return res.status(200).send('Bot is OFF');
+        }
+
+        // ── 🚨 WHITELIST SECURITY CHECK 🚨 ──
+        if (!isAdmin && wlActive && !allowedNums[pureNumber]) {
+            console.log('[WHITELIST] Blocked: ' + pureNumber);
+            return res.status(200).send('Blocked by Whitelist'); 
+        }
+
+        // ── PENDING SELECTION (Options Menu) ──────────────────────────────────
         if (/^\d+$/.test(text)) {
             var pending = null;
             try { var snap = await database.ref('pending/' + safeFrom).get(); if(snap.exists()) pending = snap.val(); } catch(e){}
@@ -458,7 +543,7 @@ module.exports = async function(req, res) {
             
             if (pending && pending.matches) {
                 var idx = parseInt(text) - 1;
-                if (pending.matches[idx]) {
+                if (idx >= 0 && idx < pending.matches.length) {
                     if (pending.type === 'invoice') { var m = pending.matches[idx]; var f = m.rows[0]; var prods = m.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG = m.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl = m.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m.invNo+'\n*Customer:* '+f['Customer Name']+'\n*Products:* '+prods+'\n*Total Value:* Rs.'+tG.toFixed(2)+'\n*Total Volume:* '+vl.toFixed(1)+' L\n*Date:* '+cleanDate(f['Invoice Date'])+'\n*Payment:* '+f['Mode Of Payement']); } 
                     else if (pending.type === 'product') { 
                         var p = pending.matches[idx]; 
@@ -470,28 +555,67 @@ module.exports = async function(req, res) {
                     
                     try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
                     delete memoryPending[safeFrom];
-                } else { await sendText(from, 'Galat number. 1 se '+pending.matches.length+' ke beech chunein.'); }
+                    return res.status(200).json({ status: 'ok' });
+                } else {
+                    // Out of bounds -> clear pending and let it run as direct invoice number search below
+                    try { await database.ref('pending/'+safeFrom).remove(); } catch(e){}
+                    delete memoryPending[safeFrom];
+                }
+            }
+        }
+
+        var lower = text.toLowerCase();
+
+        // ── 🌍 THE PUBLIC `!ASK` COMMAND (WITH TOGGLE) ─────────────────────
+        if (lower.indexOf('!ask ') === 0) { 
+            if (!settings.aiEnabled && !isAdmin) {
+                await sendText(from, "❌ Bhai, AI features abhi admin dvara disable kiye gaye hain.");
+                return res.status(200).json({ status: 'ok' });
+            }
+            var aiQuery = text.slice(5).trim();
+            var publicAiPrompt = 'You are Krish, a helpful assistant. Answer the user query using the CONTEXT DATA if related to business, otherwise answer from general knowledge. If you do not know, say "Bhai, iska jawab mujhe nahi pata." NO EMOJIS.';
+            var bizSummaryAI = generateDeepBusinessSummary(allRows);
+            var aiReplyText = await getAIReply(aiQuery, bizSummaryAI, publicAiPrompt);
+            await sendText(from, aiReplyText || "Bhai, iska jawab mujhe nahi pata."); 
+            return res.status(200).json({ status: 'ok' }); 
+        }
+
+        // ── 👑 ALL ADMIN MASTER COMMANDS ──────────────────────────────────
+        if (isAdmin) {
+            if (text === '!bot off') { await updateBotSetting('botEnabled', false); await sendText(from, '🔴 *Bot is now OFF*\nKoi bhi customer response nahi paayega.'); return res.status(200).json({status: 'ok'}); }
+            if (text === '!bot on') { await updateBotSetting('botEnabled', true); await sendText(from, '🟢 *Bot is now ON*\nBot public ke liye active hai.'); return res.status(200).json({status: 'ok'}); }
+            
+            if (text === '!ai off') { await updateBotSetting('aiEnabled', false); await sendText(from, '🔴 *AI (!ask) is now OFF*\nCustomers ab AI se nahi pooch sakte.'); return res.status(200).json({status: 'ok'}); }
+            if (text === '!ai on') { await updateBotSetting('aiEnabled', true); await sendText(from, '🟢 *AI (!ask) is now ON*\nCustomers ab AI command use kar sakte hain.'); return res.status(200).json({status: 'ok'}); }
+
+            if (text === '!whitelist on') { await setWhitelistActive(true); await sendText(from, '🔒 *Whitelist ON*\nSirf allowed numbers allowed hain.'); return res.status(200).json({ status: 'ok' }); }
+            if (text === '!whitelist off') { await setWhitelistActive(false); await sendText(from, '🔓 *Whitelist OFF*\nBot sabke liye khula hai.'); return res.status(200).json({ status: 'ok' }); }
+            
+            if (text.indexOf('!allow ') === 0) { var wNum = text.slice(7).trim(); await allowNumber(wNum); await sendText(from, '✅ *' + wNum + '* ko access mil gaya.'); return res.status(200).json({ status: 'ok' }); }
+            if (text.indexOf('!block ') === 0) { var bNum = text.slice(7).trim(); await blockNumber(bNum); await sendText(from, '❌ *' + bNum + '* block ho gaya.'); return res.status(200).json({ status: 'ok' }); }
+            
+            if (text.indexOf('!addadmin ') === 0) { var aNum = text.slice(10).trim(); await addAdminNumber(aNum); await sendText(from, '👑 *' + aNum + '* ab Admin ban gaya hai.'); return res.status(200).json({ status: 'ok' }); }
+            
+            if (text === '!listallowed') { var keys = Object.keys(allowedNums); if (keys.length === 0) await sendText(from, 'Koi number whitelist nahi hai.'); else await sendText(from, '*Allowed Numbers:*\n' + keys.join('\n')); return res.status(200).json({ status: 'ok' }); }
+            
+            if (text.indexOf('!setprompt ') === 0)  { await saveSystemPrompt(text.slice(11).trim()); await sendText(from, 'Prompt update ho gaya!'); return res.status(200).json({ status: 'ok' }); }
+            if (text === '!status')  { await sendText(from, '*Bot Status*\nBot: ' + (settings.botEnabled ? 'ON' : 'OFF') + '\nAI: ' + (settings.aiEnabled ? 'ON' : 'OFF') + '\nWhitelist: ' + (wlActive ? 'ON' : 'OFF')); return res.status(200).json({ status: 'ok' }); }
+            if (text === '!clearcache') { globalCache = null; await sendText(from, 'Cache cleared!'); return res.status(200).json({ status: 'ok' }); }
+            
+            if (text === '!commands') {
+                var cMsg = "👑 *Admin Master Commands:*\n\n" +
+                           "🤖 *Bot Toggles:*\n!bot on / !bot off\n!ai on / !ai off\n\n" +
+                           "🔒 *Security:*\n!whitelist on / !whitelist off\n!allow <9199XXXXXX>\n!block <9199XXXXXX>\n!listallowed\n\n" +
+                           "👨‍💼 *Roles:*\n!addadmin <9199XXXXXX>\n\n" +
+                           "🛠️ *System:*\n!status\n!clearcache\n!setprompt <text>\n\n" +
+                           "💬 *Ask AI:*\n!ask <question>";
+                await sendText(from, cMsg); 
                 return res.status(200).json({ status: 'ok' });
             }
         }
 
-        // ── ADMIN COMMANDS ─────────────────────────────────────────────────
-        if (isAdmin && text.toLowerCase().indexOf('!ai ') === 0) { 
-            var aiQuery = text.slice(4).trim();
-            var adminAiPrompt = 'You are a helpful AI assistant for the admin. Answer the general knowledge or analytical query. If it is about the business, use the CONTEXT DATA. If it is a general world question, use your own knowledge. If you do not know, say "Bhai, iska jawab mujhe nahi pata." NO EMOJIS.';
-            var bizSummaryAdmin = generateDeepBusinessSummary(allRows);
-            var aiReplyAdmin = await getAIReply(aiQuery, bizSummaryAdmin, adminAiPrompt);
-            await sendText(from, aiReplyAdmin || "Bhai, iska jawab mujhe nahi pata."); 
-            return res.status(200).json({ status: 'ok' }); 
-        }
-
-        if (isAdmin && text.indexOf('!setprompt ') === 0)  { await saveSystemPrompt(text.slice(11).trim()); await sendText(from, 'Prompt update ho gaya!'); return res.status(200).json({ status: 'ok' }); }
-        if (isAdmin && text === '!status')  { await sendText(from, '*Bot Status*\nOnline'); return res.status(200).json({ status: 'ok' }); }
-        if (isAdmin && text === '!clearcache') { globalCache = null; await sendText(from, 'Cache cleared!'); return res.status(200).json({ status: 'ok' }); }
-
         // ── GREETING ───────────────────────────────────────────────────────
-        var lower = text.toLowerCase();
-        if (['hi','hello','namaste','hey','hii','good morning','kaise ho','helo'].some(function(g){return lower===g||lower.startsWith(g+' ');})) { await sendText(from, 'Hello! Main Krish hoon, Shri Laxmi Auto Store ki assistant.\nInvoice details, MRP/DLP rates, customer reports pooch sakte hain!'); return res.status(200).json({ status: 'ok' }); }
+        if (['hi','hello','namaste','hey','hii','good morning','kaise ho','helo','ok','okay'].some(function(g){return lower===g||lower.startsWith(g+' ');})) { await sendText(from, 'Hello! Main Krish hoon, Shri Laxmi Auto Store ki assistant.\nInvoice details, MRP/DLP rates, customer reports pooch sakte hain!'); return res.status(200).json({ status: 'ok' }); }
 
         // ── PDF SEND ───────────────────────────────────────────────────────
         var hasSend = ['send','bhejo','share','bhej','de do','chahiye','pdf'].some(function(w){return lower.includes(w);});
@@ -511,7 +635,6 @@ module.exports = async function(req, res) {
 
         if (qIntent.type) {
             var autoDate = false;
-            // Set Default Month ONLY IF date is missing
             if (!qIntent.filters.dateRange) {
                 var now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
                 var cy = now.getFullYear(); var cm = now.getMonth();
@@ -529,7 +652,6 @@ module.exports = async function(req, res) {
             else if (qIntent.type === 'executive_report') resultText = getExecutiveReport(invoiceMap, qIntent.filters.dateRange);
             else if (qIntent.type === 'period_summary') resultText = getPeriodSummary(invoiceMap, qIntent.filters.dateRange);
 
-            // Fallback: If no data in Current Month, fetch ALL TIME.
             if (autoDate && resultText === 'NO_DATA') {
                 if (qIntent.type === 'top_customers') resultText = "*(Current Month me data nahi mila. All-Time data de raha hu)*\n\n" + getTopCustomers(invoiceMap, null, qIntent.limit);
                 else if (qIntent.type === 'top_products') resultText = "*(Current Month me data nahi mila. All-Time data de raha hu)*\n\n" + getTopProducts(allRows, null, qIntent.limit);
@@ -564,7 +686,7 @@ module.exports = async function(req, res) {
         if (invMatches.length === 1) { var m2 = invMatches[0]; var f2 = m2.rows[0]; var prods2 = m2.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m2.invNo+'\n*Customer:* '+f2['Customer Name']+'\n*Products:* '+prods2+'\n*Total Value:* Rs.'+tG2.toFixed(2)+'\n*Total Volume:* '+vl2.toFixed(1)+' L\n*Date:* '+cleanDate(f2['Invoice Date'])+'\n*Payment:* '+f2['Mode Of Payement']); return res.status(200).json({status:'ok'}); }
         if (invMatches.length > 1) { var msg2 = '*Multiple invoices. Number reply karein:*\n\n'; invMatches.forEach(function(m,i){ msg2 += (i+1)+'. '+m.customer+' ('+m.invNo+')\n'; }); var pend2 = { type:'invoice', matches:invMatches, ts:Date.now() }; try { await database.ref('pending/'+safeFrom).set(pend2); } catch(e){} memoryPending[safeFrom] = pend2; await sendText(from, msg2); return res.status(200).json({status:'ok'}); }
 
-        // ── 3. SPECIFIC CUSTOMER SEARCH (FAST MATCH) ───────────────────
+        // ── 3. SPECIFIC CUSTOMER SEARCH ───────────────────
         var cMatches = searchCustomers(text, invoiceMap);
         var isCustQuery = ['bill', 'invoice', 'khata', 'hisab', 'data', 'report', 'ka', 'ki', 'batao'].some(function(w){return lower.includes(w);});
         
@@ -584,21 +706,22 @@ module.exports = async function(req, res) {
             }
         }
 
-        // ── 4. AI DATA ANALYST FALLBACK (For custom questions like lowest selling) ──
-        var isCustomAnalytics = ['sabse', 'kam', 'lowest', 'low', 'aaj', 'kal', 'din', 'bika', 'invoice', 'bill', 'hisab'].some(function(w){return lower.includes(w);});
+        // ── 4. AI DATA ANALYST FALLBACK ──
+        if (settings.aiEnabled || isAdmin) {
+            var isCustomAnalytics = ['sabse', 'kam', 'lowest', 'low', 'aaj', 'kal', 'din', 'bika', 'invoice', 'bill', 'hisab'].some(function(w){return lower.includes(w);});
 
-        if (isCustomAnalytics) {
-            var aiPrompt = 'You are a Data Analyst. Answer the user query using ONLY the [FULL BUSINESS LEDGER] below.\n\nRULES:\n1. If asked about lowest/highest selling or specific queries, find it in the data.\n2. Write in plain Hinglish. NO EMOJIS.\n3. Add EXACTLY this line at the end of your answer: "\n*(Note: Data may incorrect please reverify)*"\n4. If data is not found or query is completely unrelated, reply EXACTLY: "Please wait, admin will reply soon."';
-            
-            var bizSummary = generateDeepBusinessSummary(allRows);
-            var aiReply = await getAIReply(text, bizSummary, aiPrompt);
-            
-            if (!aiReply || aiReply.toLowerCase().includes('admin will reply soon') || aiReply.toLowerCase().includes('error')) {
-                await sendText(from, 'Please wait, admin will reply soon.');
-            } else {
-                await sendText(from, aiReply);
+            if (isCustomAnalytics) {
+                var aiPrompt = 'You are a Data Analyst. Answer the user query using ONLY the [FULL BUSINESS LEDGER] below.\n\nRULES:\n1. Answer clearly based ONLY on the provided data.\n2. Write in plain Hinglish. NO EMOJIS.\n3. Add EXACTLY this line at the end of your answer: "\n*(Note: Data may incorrect please reverify)*"\n4. If data is not found, output EXACTLY: "Please wait, admin will reply soon."';
+                var bizSummary = generateDeepBusinessSummary(allRows);
+                var aiReply = await getAIReply(text, bizSummary, aiPrompt);
+                
+                if (!aiReply || aiReply.toLowerCase().includes('admin will reply soon') || aiReply.toLowerCase().includes('error')) {
+                    await sendText(from, 'Please wait, admin will reply soon.');
+                } else {
+                    await sendText(from, aiReply);
+                }
+                return res.status(200).json({ status: 'ok' });
             }
-            return res.status(200).json({ status: 'ok' });
         }
 
         // Final Ultimate Fallback
