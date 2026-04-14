@@ -74,7 +74,6 @@ function extractDateRange(text) {
         }
     }
 
-    // Custom range: "1 april se 5 april" or "1 to 5"
     var rangeMatch = lower.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s*(?:to|-|se)\s*(\d{1,2})\s*(?:st|nd|rd|th)?/);
     if (rangeMatch && targetMonth !== -1) {
         return { from: toTS(cy, targetMonth, parseInt(rangeMatch[1])), to: toTS(cy, targetMonth, parseInt(rangeMatch[2]), 23, 59, 59), label: rangeMatch[1] + ' to ' + rangeMatch[2] + ' ' + monthFull[targetMonth].toUpperCase(), exactMonth: targetMonth };
@@ -89,7 +88,6 @@ function extractDateRange(text) {
     }
 
     if (targetMonth !== -1) {
-        // Just the month name given (e.g. "April month")
         return { from: toTS(cy, targetMonth, 1), to: toTS(cy, targetMonth + 1, 0, 23, 59, 59), label: monthFull[targetMonth].toUpperCase(), exactMonth: targetMonth };
     }
     
@@ -113,7 +111,6 @@ function extractDateRange(text) {
     return null;
 }
 
-// ✅ Extracts exactly how many Top X the user wants
 function extractLimit(text) { 
     var m = text.match(/(?:top|sabse|highest|best)\s*(\d{1,3})/i); 
     if (m) return parseInt(m[1]);
@@ -121,7 +118,14 @@ function extractLimit(text) {
         var m2 = text.match(/\b(\d{1,2})\b/);
         if (m2) return parseInt(m2[1]);
     }
-    return 5; // Default is Top 5
+    return 5; 
+}
+
+// ✅ YAHAN HAI parseDataQuery JO MISSING THA
+function parseDataQuery(text) {
+    var result = { type: null, filters: { customer: null, dateRange: null }, limit: extractLimit(text) };
+    result.filters.dateRange = extractDateRange(text);
+    return result;
 }
 
 function isDateInRange(ts, dateRange) {
@@ -195,7 +199,6 @@ function searchInvoices(query, invoiceMap) {
     matches.sort(function(a,b){ return b.score - a.score; }); return matches.slice(0, 5);
 }
 
-// ─── CUSTOMER SEARCH ───────────────────────────────────────────────────────
 function searchCustomers(query, invoiceMap) {
     var lower = query.toLowerCase();
     var custStop = ['ka','ki','ke','ko','ne','liya','batao','dikhao','data','report','invoice','bill','total','volume','wale','wali','mahine','month','week','hafte','is','this','last','pichle','aaj','today','all','sab','poora','maal','liter','l','hisab','kitna','sale','bika'];
@@ -217,8 +220,6 @@ function searchCustomers(query, invoiceMap) {
 }
 
 // ─── EXACT ANALYTICS DATA GENERATORS ───────────────────────────────────────
-
-// 1. TOP CUSTOMERS
 function getTopCustomers(invoiceMap, dateRange, limit) {
     limit = limit || 5; var custMap = {};
     for (var inv in invoiceMap) { 
@@ -237,7 +238,6 @@ function getTopCustomers(invoiceMap, dateRange, limit) {
     var msg = '*Top ' + limit + ' Customers by Volume*\n';
     if (dateRange && dateRange.label) msg += '*Period:* ' + dateRange.label + '\n';
     msg += '\n';
-    
     sorted.forEach(function(name, i){ 
         var s = custMap[name]; 
         msg += (i+1) + '. ' + name + '\n   Vol: ' + s.vol.toFixed(1) + 'L | Val: Rs.' + s.val.toFixed(0) + ' | Bills: ' + s.count + '\n\n'; 
@@ -245,7 +245,6 @@ function getTopCustomers(invoiceMap, dateRange, limit) {
     return msg.trim();
 }
 
-// 2. TOP PRODUCTS
 function getTopProducts(allRows, dateRange, limit) {
     limit = limit || 5; var prodMap = {};
     for (var i = 0; i < allRows.length; i++) {
@@ -270,7 +269,6 @@ function getTopProducts(allRows, dateRange, limit) {
     var msg = '*Top ' + limit + ' Products by Volume*\n';
     if (dateRange && dateRange.label) msg += '*Period:* ' + dateRange.label + '\n';
     msg += '\n';
-    
     sorted.forEach(function(name, i){
         var s = prodMap[name];
         msg += (i+1) + '. ' + name + '\n   Vol: ' + s.vol.toFixed(1) + 'L | Val: Rs.' + s.val.toFixed(0) + ' | Sold: ' + s.count + ' times\n\n';
@@ -278,7 +276,6 @@ function getTopProducts(allRows, dateRange, limit) {
     return msg.trim();
 }
 
-// 3. EXECUTIVE WISE VOLUME
 function getExecutiveReport(invoiceMap, dateRange) {
     var execMap = {}; 
     for (var inv in invoiceMap) { 
@@ -302,7 +299,6 @@ function getExecutiveReport(invoiceMap, dateRange) {
     var msg = '*Sales Executive-wise Volume*\n';
     if (dateRange && dateRange.label) msg += '*Period:* ' + dateRange.label + '\n';
     msg += '\n';
-    
     keys.sort(function(a,b){return execMap[b].vol - execMap[a].vol;}).forEach(function(exec){ 
         var s = execMap[exec]; 
         msg += '*' + exec + '*\n   Vol: ' + s.vol.toFixed(1) + 'L | Val: Rs.' + s.val.toFixed(0) + ' | Bills: ' + s.count + '\n\n'; 
@@ -310,7 +306,6 @@ function getExecutiveReport(invoiceMap, dateRange) {
     return msg.trim();
 }
 
-// 4. PERIOD SUMMARY
 function getPeriodSummary(invoiceMap, dateRange) {
     var totalVol = 0, totalVal = 0, count = 0;
     for (var inv in invoiceMap) {
@@ -333,7 +328,6 @@ function getPeriodSummary(invoiceMap, dateRange) {
     return msg;
 }
 
-// 5. SPECIFIC CUSTOMER REPORT
 function getCustomerReport(custName, invoiceMap, dateRange, lastOnly) {
     var filtered = [];
     for (var inv in invoiceMap) {
@@ -341,13 +335,10 @@ function getCustomerReport(custName, invoiceMap, dateRange, lastOnly) {
         if (rows[0]['Customer Name'] !== custName) continue;
         var ts = getTimestamp(rows[0]['Invoice Date']);
         if (!isDateInRange(ts, dateRange)) continue;
-
         filtered.push({ inv: inv, rows: rows });
     }
     if (filtered.length === 0) return custName + ' ke liye is period mein koi data nahi mila.';
-    
     filtered.sort(function(a,b){ return getTimestamp(b.rows[0]['Invoice Date']) - getTimestamp(a.rows[0]['Invoice Date']); });
-    
     var totalVol = 0, totalVal = 0; 
     var showList = lastOnly ? filtered.slice(0, 1) : filtered;
     var msg = lastOnly ? '*Last Invoice Details:* ' + custName + '\n\n' : '*Customer: ' + custName + '*\n\n';
@@ -365,7 +356,6 @@ function getCustomerReport(custName, invoiceMap, dateRange, lastOnly) {
     return msg;
 }
 
-
 // ─── LOAD ALL DATA ─────────────────────────────────────────────────────────
 async function loadAllData() {
     if (globalCache && (Date.now() - lastCacheTime < 3600000)) return globalCache;
@@ -382,7 +372,7 @@ async function loadAllData() {
     lastCacheTime = Date.now(); console.log('[CACHE] Loaded.'); return globalCache;
 }
 
-// ─── AI INTENT ROUTER ──────────────────────────────────────────────────────
+// ─── AI ROUTER ─────────────────────────────────────────────────────────────
 async function getAIIntent(userMsg) {
   var key = process.env.NVIDIA_API_KEY; if (!key) return { action: 'general' };
   try {
@@ -392,7 +382,6 @@ async function getAIIntent(userMsg) {
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 50, temperature: 0.0
     }, { headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' }, timeout: 10000 });
-    
     var raw = res.data.choices[0].message.content;
     var jsonStr = raw.substring(raw.indexOf('{'), raw.lastIndexOf('}') + 1);
     return JSON.parse(jsonStr) || { action: 'general' };
@@ -427,7 +416,7 @@ module.exports = async function(req, res) {
         var sysPrompt = results[0]; var dataResult = results[1]||{}; var savedPDFs = results[2];
         var invoiceMap = dataResult.invoiceMap || {}; var mrpMap = dataResult.mrpMap || {}; var dlpMap = dataResult.dlpMap || {}; var allRows = dataResult.allRows || [];
 
-        // ── PENDING SELECTION (1, 2, 3) ────────────────────────────────────
+        // ── PENDING SELECTION ──────────────────────────────────────────────
         if (/^\d+$/.test(text)) {
             var pending = null;
             try { var snap = await database.ref('pending/' + safeFrom).get(); if(snap.exists()) pending = snap.val(); } catch(e){}
@@ -447,16 +436,16 @@ module.exports = async function(req, res) {
             }
         }
 
-        // ── ADMIN COMMANDS ────────────────────────────────────────────────
+        // ── ADMIN COMMANDS ─────────────────────────────────────────────────
         if (isAdmin && text.indexOf('!setprompt ') === 0)  { await saveSystemPrompt(text.slice(11).trim()); await sendText(from, 'Prompt update ho gaya!'); return res.status(200).json({ status: 'ok' }); }
         if (isAdmin && text === '!status')  { await sendText(from, '*Bot Status*\nOnline'); return res.status(200).json({ status: 'ok' }); }
         if (isAdmin && text === '!clearcache') { globalCache = null; await sendText(from, 'Cache cleared!'); return res.status(200).json({ status: 'ok' }); }
 
-        // ── GREETING ──────────────────────────────────────────────────────
+        // ── GREETING ───────────────────────────────────────────────────────
         var lower = text.toLowerCase();
         if (['hi','hello','namaste','hey','hii','good morning','kaise ho','helo'].some(function(g){return lower===g||lower.startsWith(g+' ');})) { await sendText(from, 'Hello! Main Krish hoon, Shri Laxmi Auto Store ki assistant.\nInvoice details, MRP/DLP rates, customer reports pooch sakte hain!'); return res.status(200).json({ status: 'ok' }); }
 
-        // ── PDF SEND ──────────────────────────────────────────────────────
+        // ── PDF SEND ───────────────────────────────────────────────────────
         var hasSend = ['send','bhejo','share','bhej','de do','chahiye','pdf'].some(function(w){return lower.includes(w);});
         var hasMRP  = ['mrp','maximum retail'].some(function(w){return lower.includes(w);});
         var hasDLP  = ['list price','dlp','dealer price','price list'].some(function(w){return lower.includes(w);});
@@ -473,33 +462,33 @@ module.exports = async function(req, res) {
         else if (lower.match(/\b(se|se wise|executive|exec|salesman)\b/)) qIntent.type = 'executive_report';
         else if (lower.match(/\b(total volume|sales summary|kitna bika|total sale)\b/)) qIntent.type = 'period_summary';
 
-        // Set Default Month if Date is missing for an Analytics Query
-        if (qIntent.type && !qIntent.dateRange) {
+        // Auto Set Default Month if Date is missing for an Analytics Query
+        if (qIntent.type && !qIntent.filters.dateRange) {
             var now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
             var cy = now.getFullYear(); var cm = now.getMonth();
-            qIntent.dateRange = { 
+            qIntent.filters.dateRange = { 
                 from: new Date(cy, cm, 1).getTime(), 
                 to: new Date(cy, cm + 1, 0, 23, 59, 59).getTime(),
                 label: 'Current Month'
             };
         }
 
-        // If it's Analytics, bypass the Price/Invoice Search entirely!
+        // Run Analytics
         if (qIntent.type) {
             if (qIntent.type === 'top_customers') { 
-                await sendText(from, getTopCustomers(invoiceMap, qIntent.dateRange, qIntent.limit)); 
+                await sendText(from, getTopCustomers(invoiceMap, qIntent.filters.dateRange, qIntent.limit)); 
                 return res.status(200).json({status:'ok'}); 
             }
             if (qIntent.type === 'top_products') { 
-                await sendText(from, getTopProducts(allRows, qIntent.dateRange, qIntent.limit)); 
+                await sendText(from, getTopProducts(allRows, qIntent.filters.dateRange, qIntent.limit)); 
                 return res.status(200).json({status:'ok'}); 
             }
             if (qIntent.type === 'executive_report') { 
-                await sendText(from, getExecutiveReport(invoiceMap, qIntent.dateRange)); 
+                await sendText(from, getExecutiveReport(invoiceMap, qIntent.filters.dateRange)); 
                 return res.status(200).json({status:'ok'}); 
             }
             if (qIntent.type === 'period_summary') {
-                await sendText(from, getPeriodSummary(invoiceMap, qIntent.dateRange));
+                await sendText(from, getPeriodSummary(invoiceMap, qIntent.filters.dateRange));
                 return res.status(200).json({status:'ok'});
             }
         }
@@ -523,13 +512,13 @@ module.exports = async function(req, res) {
         if (intent && intent.action === 'customer' && intent.name) {
             var cMatches = searchCustomers(intent.name, invoiceMap);
             if (cMatches.length === 1) {
-                var cReport = getCustomerReport(cMatches[0].name, invoiceMap, qIntent.dateRange, false);
+                var cReport = getCustomerReport(cMatches[0].name, invoiceMap, qIntent.filters.dateRange, false);
                 await sendText(from, cReport);
                 return res.status(200).json({ status: 'ok' });
             } else if (cMatches.length > 1) {
                 var cMsg = '*Multiple customers found. Number reply karein:*\n\n';
                 cMatches.forEach(function(c,i){ cMsg += (i+1)+'. '+c.name+'\n'; });
-                var cPend = { type:'customer_report', matches:cMatches, dateRange:qIntent.dateRange, lastOnly:false, ts:Date.now() };
+                var cPend = { type:'customer_report', matches:cMatches, dateRange:qIntent.filters.dateRange, lastOnly:false, ts:Date.now() };
                 try { await database.ref('pending/'+safeFrom).set(cPend); } catch(e){}
                 memoryPending[safeFrom] = cPend;
                 await sendText(from, cMsg);
