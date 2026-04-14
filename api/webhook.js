@@ -24,7 +24,7 @@ function sanitizePath(str) { return str.replace(/[@.\[\]#\$\/]/g, '_'); }
 
 async function getSystemPrompt() {
     var d = getFirebase();
-    var def = 'Tu Krish hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf CONTEXT DATA se jawab de. Kuch bhi invent mat kar.\n2. 0.9L aur 900ml dono same hote hain.\n3. Exact Size ki value batayein jo user ne puchi hai.\n4. Format: *Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n5. Text Hinglish me rakho.\n6. Emojis ya special symbols bilkul use mat karo. Rupee sign ki jagah sirf "Rs." likho.\n7. Agar data na mile to exactly likho: "Please wait, admin will reply soon."';
+    var def = 'Tu Krish hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf CONTEXT DATA se jawab de. Kuch bhi invent mat kar.\n2. 0.9L aur 900ml dono same hote hain.\n3. Exact Size ki value batayein jo user ne puchi hai.\n4. Format: *Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n5. Text Hinglish me rakho.\n6. Emojis ya special symbols bilkul use mat karo. Rupee sign ki jagah sirf "Rs." likho.\n7. Agar answer CONTEXT DATA me clearly nahi milta to exactly likho: "Please wait, admin will reply soon."';
     if (!d) return def;
     try { var s = await d.ref('botConfig/systemPrompt').get(); return s.exists() ? s.val() : def; } catch (e) { return def; }
 }
@@ -165,31 +165,23 @@ function searchCustomers(query, invoiceMap) {
         var score = 0;
         var exactMatch = false;
         
-        // Check for exact phrase match first (strongest)
         if (cLower.indexOf(q) !== -1) {
             exactMatch = true;
             score = 100;
         } else {
-            // Score based on word matches
             for (var i = 0; i < words.length; i++) {
                 if (cLower.indexOf(words[i]) !== -1) {
                     score++;
-                    // Bonus for longer word matches
                     if (words[i].length >= 5) score += 2;
                 }
             }
         }
         
         if (score > 0) {
-            matches.push({ 
-                name: cName, 
-                score: score,
-                exact: exactMatch
-            });
+            matches.push({ name: cName, score: score, exact: exactMatch });
         }
     }
     
-    // Sort: exact matches first, then by score
     matches.sort(function(a,b){
         if (a.exact && !b.exact) return -1;
         if (!a.exact && b.exact) return 1;
@@ -203,11 +195,9 @@ function searchCustomers(query, invoiceMap) {
 function detectQueryIntent(text) {
     var lower = text.toLowerCase();
 
-    // Product vs Customer detection
     var hasProductKeywords = ['activ','gtx','magnatec','edge','crb','rx','vecton','transmax','spheerol','radicool','power1','fork oil','brake fluid','grease'].some(function(w){return lower.indexOf(w)!==-1;});
     var hasCustomerKeywords = ['enterprises','service','center','motors','traders','dealers','wale','wali','ka','ki','ke','ne','liya'].some(function(w){return lower.indexOf(' '+w+' ')!==-1 || lower.indexOf(w+' ')===0;});
     
-    // Date range keywords
     var hasThisMonth  = ['is month','this month','mahine','is mahine','current month','aaj ka mahina'].some(function(w){return lower.indexOf(w)!==-1;});
     var hasLastMonth  = ['last month','pichle mahine','pichla mahina','previous month'].some(function(w){return lower.indexOf(w)!==-1;});
     var hasThisWeek   = ['is hafte','this week','weekly','is week','current week','aaj ka hafte'].some(function(w){return lower.indexOf(w)!==-1;});
@@ -215,15 +205,13 @@ function detectQueryIntent(text) {
     var hasToday      = ['aaj','today','aaj ke'].some(function(w){return lower.indexOf(w)!==-1;});
     var hasAll        = ['all','saare','sab','poora','history','purana','pichla sab'].some(function(w){return lower.indexOf(w)!==-1;});
     
-    // Query type keywords
-    var hasTop        = ['top','highest','sabse zyada','best','max','zyada bika'].some(function(w){return lower.indexOf(w)!==-1;});
+    var hasTop        = ['top','highest','sabse zyada','best','max','zyada bika','top 10','top 5'].some(function(w){return lower.indexOf(w)!==-1;});
     var hasProduct    = ['product','item','maal','oil','lubricant'].some(function(w){return lower.indexOf(w)!==-1;});
     var hasExec       = ['executive','salesman','jagdish','daya','rakesh','gajanand','naresh'].some(function(w){return lower.indexOf(w)!==-1;});
     var hasCustomer   = ['customer','ka','ki','ke','wale'].some(function(w){return lower.indexOf(' '+w+' ')!==-1 || lower.indexOf(w+' ')===0;});
     var hasInvoice    = ['invoice','bill','inv'].some(function(w){return lower.indexOf(w)!==-1;});
-    var hasSummary    = ['summary','report','total','kitna','volume','sale','bika','hisab','liter'].some(function(w){return lower.indexOf(w)!==-1;});
+    var hasSummary    = ['summary','report','total','kitna','volume','sale','bika','hisab','liter','litre'].some(function(w){return lower.indexOf(w)!==-1;});
 
-    // Date filter determine karo
     var dateFilter = 'all';
     if (hasToday)     dateFilter = 'today';
     else if (hasThisWeek)  dateFilter = 'this_week';
@@ -232,29 +220,29 @@ function detectQueryIntent(text) {
     else if (hasLastMonth) dateFilter = 'last_month';
     else if (hasAll)       dateFilter = 'all';
 
-    // ── TOP PRODUCTS (not customers) ──────────────────────────────────────
     if (hasTop && hasProduct && !hasCustomer) {
         return { type: 'top_products', dateFilter: dateFilter };
     }
     
-    // ── TOP CUSTOMERS ─────────────────────────────────────────────────────
     if (hasTop && !hasProduct) {
         return { type: 'top_customers', dateFilter: dateFilter };
     }
     
-    // ── EXECUTIVE REPORT ──────────────────────────────────────────────────
     if (hasExec) {
         return { type: 'executive_report', dateFilter: dateFilter };
     }
 
-    // ── CUSTOMER-SPECIFIC QUERIES ─────────────────────────────────────────
     if (hasCustomerKeywords || (hasCustomer && !hasProduct) || (hasInvoice && !lower.match(/inv\/\d/i)) || hasSummary) {
         return { type: 'customer_query', dateFilter: dateFilter };
     }
 
-    // ── PRODUCT RATE QUERY ────────────────────────────────────────────────
     if (hasProductKeywords) {
         return { type: 'product_rate', dateFilter: 'all' };
+    }
+
+    // ✅ NEW: Analytics queries that should go to AI
+    if (hasSummary || hasTop || lower.indexOf('kitna') !== -1 || lower.indexOf('hisab') !== -1 || lower.indexOf('report') !== -1) {
+        return { type: 'ai_analytics', dateFilter: dateFilter };
     }
 
     return { type: 'general' };
@@ -269,7 +257,7 @@ function getDateRange(filter) {
         return { from: today, to: new Date(today.getTime() + 86400000 - 1) };
     }
     if (filter === 'this_week') {
-        var day  = today.getDay(); // 0=Sun
+        var day  = today.getDay();
         var mon  = new Date(today); mon.setDate(today.getDate() - (day === 0 ? 6 : day - 1));
         return { from: mon, to: new Date(mon.getTime() + 7 * 86400000 - 1) };
     }
@@ -284,7 +272,7 @@ function getDateRange(filter) {
     if (filter === 'last_month') {
         return { from: new Date(now.getFullYear(), now.getMonth() - 1, 1), to: new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59) };
     }
-    return null; // all
+    return null;
 }
 
 function isInRange(dateVal, range) {
@@ -367,7 +355,7 @@ function getTopCustomers(invoiceMap, dateFilter, limit) {
     return msg;
 }
 
-// ─── ✅ NEW: TOP PRODUCTS REPORT (by volume sold) ──────────────────────────
+// ─── ✅ TOP PRODUCTS REPORT (by volume sold) ───────────────────────────────
 function getTopProducts(allRows, dateFilter, limit) {
     limit = limit || 5;
     var range = getDateRange(dateFilter);
@@ -376,8 +364,6 @@ function getTopProducts(allRows, dateFilter, limit) {
     for (var i = 0; i < allRows.length; i++) {
         var r = allRows[i];
         if (!r['Invoice No']) continue;
-        
-        // Date filter
         if (range && !isInRange(r['Invoice Date'], range)) continue;
         
         var prodName = (r['Product Name'] || 'Unknown').trim();
@@ -453,33 +439,40 @@ function getDateWiseSummary(invoiceMap, dateFilter) {
     return msg;
 }
 
-// ─── DEEP BUSINESS SUMMARY (for AI fallback) ───────────────────────────────
-function generateDeepBusinessSummary(allRows) {
-    var custStats = {}, monthStats = {}, execStats = {}, prodStats = {};
-    for (var i = 0; i < allRows.length; i++) {
-        var r = allRows[i]; if (!r['Invoice No']) continue;
-        var cName = (r['Customer Name'] || 'Unknown').trim();
-        var exec  = (r['Sales Executive Name'] || 'Unknown').trim();
-        var prod  = (r['Product Name'] || 'Unknown').trim();
-        var vol   = parseFloat(r['Product Volume']) || 0;
-        var val   = parseFloat(r['Total Value incl VAT/GST']) || 0;
-        var dt    = typeof r['Invoice Date'] === 'number' ? new Date(Math.round((r['Invoice Date']-25569)*86400000)) : new Date(r['Invoice Date']);
-        var month = isNaN(dt.getTime()) ? 'Unknown' : dt.toLocaleString('en-US',{month:'short',year:'numeric'});
-        
-        if (!custStats[cName])  custStats[cName]  = {vol:0,val:0};  custStats[cName].vol  += vol; custStats[cName].val  += val;
-        if (!monthStats[month]) monthStats[month] = {vol:0,val:0};  monthStats[month].vol += vol; monthStats[month].val += val;
-        if (!execStats[exec])   execStats[exec]   = {vol:0,val:0};  execStats[exec].vol   += vol; execStats[exec].val   += val;
-        if (!prodStats[prod])   prodStats[prod]   = {vol:0,val:0};  prodStats[prod].vol   += vol; prodStats[prod].val   += val;
-    }
-    var summary = '[BUSINESS DATA]\n\n-- MONTHLY --\n';
-    for (var m in monthStats) summary += '['+m+'] Vol:'+monthStats[m].vol.toFixed(1)+'L Val:Rs.'+monthStats[m].val.toFixed(0)+'\n';
-    summary += '\n-- CUSTOMERS --\n';
-    Object.keys(custStats).sort(function(a,b){return custStats[b].vol-custStats[a].vol;}).slice(0,20).forEach(function(k){ summary += '[CUST] '+k+' Vol:'+custStats[k].vol.toFixed(1)+'L Val:Rs.'+custStats[k].val.toFixed(0)+'\n'; });
-    summary += '\n-- PRODUCTS --\n';
-    Object.keys(prodStats).sort(function(a,b){return prodStats[b].vol-prodStats[a].vol;}).slice(0,20).forEach(function(k){ summary += '[PROD] '+k+' Vol:'+prodStats[k].vol.toFixed(1)+'L Val:Rs.'+prodStats[k].val.toFixed(0)+'\n'; });
-    summary += '\n-- EXECUTIVES --\n';
-    for (var e in execStats) summary += '[EXEC] '+e+' Vol:'+execStats[e].vol.toFixed(1)+'L Val:Rs.'+execStats[e].val.toFixed(0)+'\n';
-    return summary.slice(0, 18000);
+// ─── ✅ STRUCTURED DATA FOR AI (Constrained Context) ───────────────────────
+function generateAIContext(allRows, invoiceMap, mrpMap, dlpMap, query) {
+    var context = '[INVOICE DATA - Use ONLY for customer/volume queries]\n';
+    
+    // Sample recent invoices (max 50 to stay within token limit)
+    var sampleInvoices = Object.keys(invoiceMap).slice(0, 50);
+    sampleInvoices.forEach(function(invNo) {
+        var rows = invoiceMap[invNo];
+        if (!rows || rows.length === 0) return;
+        var f = rows[0];
+        var vol = rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0);
+        var val = rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0);
+        context += 'INV:'+invNo+'|CUST:'+f['Customer Name']+'|DATE:'+cleanDate(f['Invoice Date'])+'|VOL:'+vol.toFixed(1)+'L|VAL:Rs.'+val.toFixed(0)+'\n';
+    });
+    
+    context += '\n[PRODUCT PRICES - Use ONLY for MRP/DLP queries]\n';
+    var sampleProducts = Object.keys(mrpMap).slice(0, 30);
+    sampleProducts.forEach(function(name) {
+        if (mrpMap[name] && dlpMap[name]) {
+            var sizes = Object.keys(mrpMap[name]).slice(0, 5);
+            sizes.forEach(function(sz) {
+                context += 'PROD:'+name+'|SIZE:'+sz+'|MRP:Rs.'+mrpMap[name][sz]+'|DLP:Rs.'+(dlpMap[name][sz]||'N/A')+'\n';
+            });
+        }
+    });
+    
+    context += '\n[QUERY INSTRUCTIONS]\n';
+    context += '- Sirf upar diye gaye DATA se jawab do.\n';
+    context += '- Agar data me answer nahi milta to exactly likho: "Please wait, admin will reply soon."\n';
+    context += '- Kuch bhi invent mat karo, guess mat karo, assume mat karo.\n';
+    context += '- 0.9L = 900ml (ye same hain).\n';
+    context += '- Format: *Heading:* Value\n*Total:* Rs.X\n- Hinglish me jawab do.\n';
+    
+    return context.slice(0, 18000); // Stay within token limits
 }
 
 // ─── LOAD ALL DATA ─────────────────────────────────────────────────────────
@@ -505,7 +498,6 @@ async function loadAllData() {
     var dlpMap  = {};
     if (dlpFile) { try { var r3 = await axios.get(base+'/'+encodeURIComponent(dlpFile),{responseType:'arraybuffer'}); dlpMap = loadPriceListFromExcel(XLSX.read(r3.data,{type:'buffer'})); } catch(e){} }
 
-    // PDF files ke URLs
     var mrpPdfFile  = fileList.find(function(f){ return f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); });
     var listPdfFile = fileList.find(function(f){ return (f.toLowerCase().includes('list')||f.toLowerCase().includes('dlp')) && !f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); });
     var mrpPdfUrl   = mrpPdfFile  ? base+'/'+encodeURIComponent(mrpPdfFile)  : '';
@@ -516,7 +508,6 @@ async function loadAllData() {
         allRows:        allRows,
         mrpMap:         mrpMap,
         dlpMap:         dlpMap,
-        businessSummary: generateDeepBusinessSummary(allRows),
         mrpFile:        mrpFile,
         dlpFile:        dlpFile,
         mrpPdfUrl:      mrpPdfUrl,
@@ -529,17 +520,32 @@ async function loadAllData() {
     return globalCache;
 }
 
-// ─── AI REPLY ──────────────────────────────────────────────────────────────
-async function getAIReply(userMsg, data, prompt) {
+// ─── AI REPLY (With Strict Constraints) ────────────────────────────────────
+async function getAIReply(userMsg, contextData, prompt) {
     var key = process.env.NVIDIA_API_KEY; if (!key) return null;
     try {
         var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', {
             model: 'meta/llama-3.1-70b-instruct',
-            messages: [{ role: 'system', content: prompt+'\n\nCONTEXT DATA:\n'+data }, { role: 'user', content: userMsg }],
-            max_tokens: 800, temperature: 0.1
-        }, { headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 25000 });
-        return sanitizeReply(res.data.choices[0].message.content);
-    } catch (e) { return null; }
+            messages: [
+                { role: 'system', content: prompt },
+                { role: 'user', content: 'CONTEXT DATA:\n' + contextData + '\n\nUSER QUERY: ' + userMsg }
+            ],
+            max_tokens: 800,
+            temperature: 0.1
+        }, { 
+            headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, 
+            timeout: 30000 
+        });
+        var reply = res.data.choices[0].message.content;
+        // ✅ Double-check: If reply doesn't contain data-based answer, fallback
+        if (!reply || reply.toLowerCase().includes('cannot') || reply.toLowerCase().includes('not found') || reply.toLowerCase().includes('admin will reply')) {
+            return null;
+        }
+        return sanitizeReply(reply);
+    } catch (e) { 
+        console.error('[AI] Error:', e.message);
+        return null; 
+    }
 }
 
 // ─── SEND ──────────────────────────────────────────────────────────────────
@@ -642,7 +648,7 @@ module.exports = async function(req, res) {
         if (hasSend && hasDLP  && dataResult.listPdfUrl) { await sendDocument(from, dataResult.listPdfUrl, dataResult.listPdfFile, dataResult.listPdfFile); return res.status(200).json({status:'ok'}); }
         for (var k in savedPDFs) { if (lower.includes(k) && hasSend) { await sendDocument(from, savedPDFs[k].url, savedPDFs[k].name, savedPDFs[k].name); return res.status(200).json({status:'ok'}); } }
 
-        // ── PRODUCT RATE QUERY ────────────────────────────────────────────
+        // ── PRODUCT RATE QUERY (Code-based, fast) ─────────────────────────
         var prodMatches = searchProducts(text, mrpMap, dlpMap);
         var invMatches  = searchInvoices(text, invoiceMap);
         var isRateQ     = ['rate','price','mrp','dlp','kitne ka','dam','rupay'].some(function(w){return lower.includes(w);});
@@ -663,7 +669,7 @@ module.exports = async function(req, res) {
             return res.status(200).json({status:'ok'});
         }
 
-        // ── INVOICE SEARCH ────────────────────────────────────────────────
+        // ── INVOICE SEARCH (Code-based, fast) ─────────────────────────────
         if (invMatches.length === 1) {
             var m2 = invMatches[0]; var f2 = m2.rows[0];
             var prods2 = m2.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + ');
@@ -686,43 +692,48 @@ module.exports = async function(req, res) {
         var qIntent = detectQueryIntent(text);
         console.log('[INTENT] type:'+qIntent.type+' dateFilter:'+qIntent.dateFilter+' query:'+text);
 
-        // ✅ TOP PRODUCTS (by volume sold)
+        // ✅ TOP PRODUCTS (Code-based)
         if (qIntent.type === 'top_products') {
-            var topProdReport = getTopProducts(allRows, qIntent.dateFilter, 5);
+            var topProdReport = getTopProducts(allRows, qIntent.dateFilter, 10); // User asked for top 10
             await sendText(from, topProdReport);
             return res.status(200).json({status:'ok'});
         }
 
-        // ✅ TOP CUSTOMERS
+        // ✅ TOP CUSTOMERS (Code-based)
         if (qIntent.type === 'top_customers') {
-            var topCustReport = getTopCustomers(invoiceMap, qIntent.dateFilter, 5);
+            var topCustReport = getTopCustomers(invoiceMap, qIntent.dateFilter, 10);
             await sendText(from, topCustReport);
             return res.status(200).json({status:'ok'});
         }
 
-        // ✅ EXECUTIVE REPORT
+        // ✅ EXECUTIVE REPORT (Code-based)
         if (qIntent.type === 'executive_report') {
             var execReport = getExecutiveReport(invoiceMap, qIntent.dateFilter);
             await sendText(from, execReport);
             return res.status(200).json({status:'ok'});
         }
 
-        // ✅ CUSTOMER-SPECIFIC QUERIES (with strict matching + numbered selection)
+        // ✅ CUSTOMER-SPECIFIC QUERIES (Code-based + AI fallback)
         if (qIntent.type === 'customer_query') {
             var cMatches = searchCustomers(text, invoiceMap);
 
             if (cMatches.length === 0) {
-                // Date-only query without customer name
                 if (qIntent.dateFilter !== 'all') {
                     var dateSummary = getDateWiseSummary(invoiceMap, qIntent.dateFilter);
                     await sendText(from, dateSummary);
                     return res.status(200).json({status:'ok'});
                 }
-                await sendText(from, 'Please wait, admin will reply soon.');
+                // ✅ FALLBACK TO AI for complex customer analytics
+                var aiContext = generateAIContext(allRows, invoiceMap, mrpMap, dlpMap, text);
+                var aiAnswer = await getAIReply(text, aiContext, sysPrompt);
+                if (aiAnswer) {
+                    await sendText(from, aiAnswer);
+                } else {
+                    await sendText(from, 'Please wait, admin will reply soon.');
+                }
                 return res.status(200).json({status:'ok'});
             }
 
-            // ✅ If multiple matches, ask user to confirm with numbers
             if (cMatches.length > 1) {
                 var cMsg = '*Multiple customers found. Kaunsa customer? Number reply karein:*\n\n';
                 cMatches.forEach(function(c,i){ cMsg += (i+1)+'. '+c.name+'\n'; });
@@ -733,23 +744,26 @@ module.exports = async function(req, res) {
                 return res.status(200).json({status:'ok'});
             }
 
-            // ✅ Single match - show report
             var cReport = getCustomerReport(cMatches[0].name, invoiceMap, qIntent.dateFilter);
             await sendText(from, cReport);
             return res.status(200).json({status:'ok'});
         }
 
-        // ── AI FALLBACK (general analytics only) ─────────────────────────
-        var aiReply2 = await getAIReply(
-            'User Query: "'+text+'"\nInstructions: Use CONTEXT DATA to answer. If answer not clearly in data, say exactly: "Please wait, admin will reply soon."',
-            dataResult.businessSummary || '',
-            sysPrompt
-        );
-        if (!aiReply2 || aiReply2.toLowerCase().includes('admin will reply soon') || aiReply2.includes('Error')) {
-            await sendText(from, 'Please wait, admin will reply soon.');
-        } else {
-            await sendText(from, aiReply2);
+        // ✅ AI ANALYTICS FALLBACK (For complex queries code can't handle)
+        if (qIntent.type === 'ai_analytics' || qIntent.type === 'general') {
+            var aiContext = generateAIContext(allRows, invoiceMap, mrpMap, dlpMap, text);
+            var aiAnswer = await getAIReply(text, aiContext, sysPrompt);
+            
+            if (aiAnswer && !aiAnswer.toLowerCase().includes('admin will reply soon')) {
+                await sendText(from, aiAnswer);
+            } else {
+                await sendText(from, 'Please wait, admin will reply soon.');
+            }
+            return res.status(200).json({status:'ok'});
         }
+
+        // ── DEFAULT FALLBACK ─────────────────────────────────────────────
+        await sendText(from, 'Please wait, admin will reply soon.');
         return res.status(200).json({status:'ok'});
 
     } catch (e) {
