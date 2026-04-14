@@ -23,7 +23,7 @@ function sanitizePath(str) { return str.replace(/[@.\[\]#\$\/]/g, '_'); }
 
 async function getSystemPrompt() {
   var d = getFirebase();
-  var def = 'Tu Krish hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf data se exact rate batao. 0.9L aur 900ml dono same hote hain.\n2. Exact Size ki value batayein jo user ne puchi hai. Agar user ne 900ml pucha hai, toh sirf 900ml ka batayein.\n3. Format:\n*Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n4. Text Hinglish me rakho.\n5. IMPORTANT: Emojis ya special symbols bilkul use mat karo. Rupee sign ki jagah sirf "Rs." likho.';
+  var def = 'Tu Krish hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf data se exact rate batao. 0.9L aur 900ml dono same hote hain.\n2. Exact Size ki value batayein jo user ne puchi hai.\n3. Format:\n*Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n4. Text Hinglish me rakho.\n5. IMPORTANT: Emojis ya special symbols bilkul use mat karo. Rupee sign ki jagah sirf "Rs." likho.';
   if (!d) return def;
   try { var s = await d.ref('botConfig/systemPrompt').get(); return s.exists() ? s.val() : def; } catch (e) { return def; }
 }
@@ -194,7 +194,7 @@ function searchInvoices(query, invoiceMap) {
   return matches.slice(0, 5);
 }
 
-// ✅ NAYA FUNCTION: Customer ka naam dhoondhne ke liye (For JSON Router)
+// ✅ NAYA: Smart Customer Search (Similar naam dhoondhne ke liye)
 function searchCustomers(query, invoiceMap) {
   var q = query.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
   var stopWords = ['ka','ki','ke','ko','batao','dikhao','data','report','invoice','bill','total','volume','hisab','wale','wali'];
@@ -220,7 +220,6 @@ function searchCustomers(query, invoiceMap) {
   return matches.slice(0, 5);
 }
 
-// ✅ NAYA FUNCTION: Specific Customer ke saare invoices aur total filter karne ke liye
 function getCustomerReport(custName, invoiceMap) {
     var rows = [];
     for (var inv in invoiceMap) {
@@ -228,19 +227,19 @@ function getCustomerReport(custName, invoiceMap) {
             rows.push({inv: inv, data: invoiceMap[inv]});
         }
     }
-    if(rows.length === 0) return "Data me nahi mila.";
+    if(rows.length === 0) return "Please wait, admin will reply soon.";
 
     rows.sort(function(a,b) {
        var dtA = typeof a.data[0]['Invoice Date'] === 'number' ? a.data[0]['Invoice Date'] : Date.parse(a.data[0]['Invoice Date']);
        var dtB = typeof b.data[0]['Invoice Date'] === 'number' ? b.data[0]['Invoice Date'] : Date.parse(b.data[0]['Invoice Date']);
-       return dtB - dtA; // Latest pehle
+       return dtB - dtA; 
     });
 
     var totalVol = 0;
     var totalVal = 0;
     var msg = "*Customer Report: " + custName + "*\n\n";
 
-    var limit = Math.min(rows.length, 10); // Start me sirf 10 bills dikhayenge
+    var limit = Math.min(rows.length, 10); 
 
     for(var i=0; i<rows.length; i++) {
         var m = rows[i].data;
@@ -373,9 +372,9 @@ async function loadAllData() {
   return globalCache;
 }
 
-// ✅ NAYA AI ROUTER (Sirf 0.5 sec lega Intent samajhne me)
+// AI Router JSON
 async function getAIIntent(userMsg) {
-  var key = process.env.NVIDIA_API_KEY; if (!key) return null;
+  var key = process.env.NVIDIA_API_KEY; if (!key) return { action: 'general' };
   try {
     var prompt = 'You are a JSON router. Read the user query: "' + userMsg + '".\nIf the user is asking for data/bills/history of a SPECIFIC customer by name (e.g. "Raju ka bill batao"), output ONLY valid JSON: {"action": "customer", "name": "Extract Name"}.\nOtherwise, output ONLY JSON: {"action": "general"}.\nNo markdown, just raw JSON.';
     var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', {
@@ -386,20 +385,20 @@ async function getAIIntent(userMsg) {
     
     var raw = res.data.choices[0].message.content;
     var jsonStr = raw.substring(raw.indexOf('{'), raw.lastIndexOf('}') + 1);
-    return JSON.parse(jsonStr);
-  } catch (e) { return null; }
+    return JSON.parse(jsonStr) || { action: 'general' };
+  } catch (e) { return { action: 'general' }; }
 }
 
 async function getAIReply(userMsg, data, prompt) {
-  var key = process.env.NVIDIA_API_KEY; if (!key) return 'NVIDIA_API_KEY missing.';
+  var key = process.env.NVIDIA_API_KEY; if (!key) return null;
   try { 
     var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', { 
       model: 'meta/llama-3.1-70b-instruct', 
       messages: [{ role: 'system', content: prompt + '\n\nCONTEXT DATA:\n' + data }, { role: 'user', content: userMsg }], 
       max_tokens: 800, temperature: 0.1 
     }, { headers: { 'Authorization': 'Bearer ' + key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 25000 }); 
-    return sanitizeReply(res.data.choices[0].message.content) || 'Kuch error aaya.'; 
-  } catch (e) { return 'System Error: ' + e.message; }
+    return sanitizeReply(res.data.choices[0].message.content); 
+  } catch (e) { return null; } 
 }
 
 async function sendText(to, text) {
@@ -431,7 +430,6 @@ module.exports = async function(req, res) {
     var results = await Promise.all([getSystemPrompt(), loadAllData(), getPDFList()]);
     var sysPrompt = results[0]; var dataResult = results[1] || {}; var savedPDFs = results[2];
 
-    // ✅ Option Selection Handlers (For 1, 2, 3...)
     if (/^\d+$/.test(text)) {
       var pending = null;
       if (database) { try { var snap = await database.ref('pending/' + safeFrom).get(); if (snap.exists()) pending = snap.val(); } catch (e) {} }
@@ -454,7 +452,6 @@ module.exports = async function(req, res) {
             var aiReply = await getAIReply(aiPrompt, context, sysPrompt);
             await sendText(from, aiReply);
             
-          // ✅ NAYA OPTION HANDLER: Custom Customer Report
           } else if (pending.type === 'customer_report') {
             var cMatch = pending.matches[idx];
             var report = getCustomerReport(cMatch.name, dataResult.invoiceMap);
@@ -498,6 +495,10 @@ module.exports = async function(req, res) {
         memoryPending[safeFrom] = { type: 'product', matches: prodMatches, originalQuery: text, ts: Date.now() };
         await sendText(from, msg);
         return res.status(200).json({ status: 'ok' });
+      } else {
+        // Fallback rule 1: Product not found -> Exact "admin" message
+        await sendText(from, 'Please wait, admin will reply soon.');
+        return res.status(200).json({ status: 'ok' });
       }
     }
 
@@ -517,43 +518,36 @@ module.exports = async function(req, res) {
       return res.status(200).json({ status: 'ok' });
     }
 
-    // ✅ NAYA: AI INTENT ROUTER (Customer Analytics ya General Query)
     var isAnalytics = ['top', 'highest', 'total', 'month', 'volume', 'sales', 'executive', 'report', 'summary', 'sabse', 'zyada', 'kam', 'hisab', 'bika', 'kaun', 'kisne', 'kiska', 'din', 'hafts', 'week', 'mahine', 'saal', 'aaj', 'kal', 'kitna', 'customer', 'kya', 'bill', 'invoices', 'khata'].some(function(w){return lower.indexOf(w)!==-1;});
 
     if (isAnalytics || lower.length > 5) {
       
-      // AI se pucho user kya chahta hai
       var intent = await getAIIntent(text);
+      if (!intent) intent = { action: 'general' }; 
       
-      // Agar AI ne Customer dhundhne ko bola
-      if (intent && intent.action === 'customer' && intent.name) {
+      if (intent.action === 'customer' && intent.name) {
         var cMatches = searchCustomers(intent.name, dataResult.invoiceMap);
         
         if (cMatches.length === 1) {
-          // Exact ek customer mil gaya, direct report bhej do
           var cReport = getCustomerReport(cMatches[0].name, dataResult.invoiceMap);
           await sendText(from, cReport);
           return res.status(200).json({ status: 'ok' });
-          
         } else if (cMatches.length > 1) {
-          // Ek se zyada customer is naam ke (eg. "Raju"), Options do
           var msg = '*Kaunse customer ka data dekhna hai? Number reply karein:*\n\n';
           for (var i = 0; i < cMatches.length; i++) { msg += (i + 1) + '. ' + cMatches[i].name + '\n'; }
-          
           if (database) { try { await database.ref('pending/' + safeFrom).set({ type: 'customer_report', matches: cMatches, ts: Date.now() }); } catch (e) {} }
           memoryPending[safeFrom] = { type: 'customer_report', matches: cMatches, ts: Date.now() };
           await sendText(from, msg);
           return res.status(200).json({ status: 'ok' });
-          
         }
-        // Agar customer nahi mila, toh general analytics mein fallback hoga
       }
 
-      // Agar JSON router general bola, ya customer naam match nahi hua
-      var customPrompt = 'User Query: "' + text + '"\n\nInstructions:\n1. Look at the [DEEP DATA LEDGER FOR AI] below which contains exact pre-calculated volumes and values.\n2. If the user asks for a time period (e.g., "April ka sales"), find it in the monthly totals.\n3. If the data is NOT in the ledger, or if the question is completely unrelated to business, YOU MUST REPLY EXACTLY WITH: "Please wait, admin will reply soon." DO NOT guess or invent numbers.\n4. Format your answer nicely in plain Hinglish text. NO EMOJIS. Use "Rs." for currency.';
+      // AI Fallback Rule
+      var customPrompt = 'User Query: "' + text + '"\n\nInstructions:\n1. Use the CONTEXT DATA to answer the user.\n2. IMPORTANT: If the data is empty OR the answer is not clearly present in the data, YOU MUST EXACTLY SAY "Please wait, admin will reply soon.".\n3. Do not guess. NO EMOJIS, NO SYMBOLS. Format in plain Hinglish text.';
+      
       var customReply = await getAIReply(customPrompt, dataResult.businessSummary, sysPrompt);
       
-      if (!customReply || customReply.indexOf('Error') !== -1 || customReply.toLowerCase().indexOf('admin will reply soon') !== -1) {
+      if (!customReply || customReply.toLowerCase().indexOf('admin will reply soon') !== -1 || customReply.indexOf('Error') !== -1) {
         await sendText(from, 'Please wait, admin will reply soon.');
       } else {
         await sendText(from, customReply);
@@ -561,7 +555,7 @@ module.exports = async function(req, res) {
       return res.status(200).json({ status: 'ok' });
     }
 
-    // Default Fallback
+    // Default Ultimate Fallback (100% exact fallback string as requested)
     await sendText(from, 'Please wait, admin will reply soon.');
     return res.status(200).json({ status: 'ok' });
   } catch (e) {
