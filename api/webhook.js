@@ -23,7 +23,6 @@ function sanitizePath(str) { return str.replace(/[@.\[\]#\$\/]/g, '_'); }
 
 async function getSystemPrompt() {
   var d = getFirebase();
-  // ✅ FIX: Added STRICT rule to prevent weird symbols and force plain text
   var def = 'Tu Krish hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf data se exact rate batao. 0.9L aur 900ml dono same hote hain.\n2. Exact Size ki value batayein jo user ne puchi hai. Agar user ne 900ml pucha hai, toh sirf 900ml ka batayein.\n3. Format:\n*Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n4. Text Hinglish me rakho.\n5. IMPORTANT: Emojis ya special symbols bilkul use mat karo. Rupee sign ki jagah sirf "Rs." likho.';
   if (!d) return def;
   try { var s = await d.ref('botConfig/systemPrompt').get(); return s.exists() ? s.val() : def; } catch (e) { return def; }
@@ -33,7 +32,6 @@ async function saveSystemPrompt(p) { var d = getFirebase(); if (d) { try { await
 async function getPDFList() { var d = getFirebase(); if (!d) return {}; try { var s = await d.ref('botConfig/pdfFiles').get(); return s.exists() ? s.val() : {}; } catch(e){ return {}; } }
 async function savePDFList(data) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/pdfFiles').set(data); } catch(e){} } }
 
-// ✅ FIX: Aggressive Sanitizer to remove weird signs like "ðŸ“‹" or "â‚¹"
 function sanitizeReply(t) {
   if (!t) return '';
   var clean = t.replace(/[❌✅✨🔍📄📋📊💰]/g, '');
@@ -55,11 +53,8 @@ function cleanDate(val) {
 function normalizeSizeHeader(header) {
   if (!header) return '';
   var h = String(header).toLowerCase().replace(/\s+/g, '').replace(/\/+$/, '').replace(/\\+$/, '');
-  
   if (h.indexOf('brand') !== -1) return 'BRAND NAME';
-
   if (h === '1.2/11' || h === '1.2/1l') return '1L'; 
-  
   if (h === '900ml' || h === '0.9l' || h === '900') return '900ML';
   if (h === '800ml' || h === '0.8l' || h === '800') return '800ML';
   if (h === '600ml' || h === '0.6l' || h === '600') return '600ML';
@@ -68,7 +63,6 @@ function normalizeSizeHeader(header) {
   if (h === '250ml' || h === '0.25l' || h === '250') return '250ML';
   if (h === '175ml' || h === '0.175l' || h === '175') return '175ML';
   if (h === '100ml' || h === '0.1l' || h === '100') return '100ML';
-
   if (h === '1' || h === '1l' || h === '11') return '1L';
   if (h === '1.2' || h === '1.2l') return '1.2L';
   if (h === '1.5' || h === '1.5l') return '1.5L';
@@ -91,7 +85,6 @@ function normalizeSizeHeader(header) {
   if (h === '21' || h === '21l' || h === '211') return '21L';
   if (h === '50' || h === '50l' || h === '501') return '50L';
   if (h === '210' || h === '210l' || h === '2101') return '210L';
-
   return String(header).trim().toUpperCase();
 }
 
@@ -100,11 +93,9 @@ function loadPriceListFromExcel(wb) {
   for (var s = 0; s < wb.SheetNames.length; s++) {
     var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[s]], { header: 1, defval: '' });
     var currentHeaders = [];
-    
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i];
       if (!row || row.length === 0) continue;
-      
       var col0 = String(row[0] || '').trim();
       var lowerCol0 = col0.toLowerCase();
       
@@ -119,7 +110,6 @@ function loadPriceListFromExcel(wb) {
         if (!hasPrice) continue;
         
         if (!priceMap[col0]) priceMap[col0] = {};
-        
         for (var j = 1; j < row.length; j++) {
           var size = currentHeaders[j];
           var val = parseFloat(row[j]);
@@ -141,7 +131,6 @@ function searchProducts(query, mrpMap, dlpMap) {
   if (searchTerms.length === 0) return [];
 
   var combinedProducts = {};
-  
   for (var mName in mrpMap) {
     var normName = mName.toLowerCase().replace(/[^a-z0-9]/g, '');
     if (!combinedProducts[normName]) combinedProducts[normName] = { orig: mName, sizes: {} };
@@ -163,29 +152,22 @@ function searchProducts(query, mrpMap, dlpMap) {
   var products = [];
   for (var key in combinedProducts) {
     var score = 0;
-    for (var t = 0; t < searchTerms.length; t++) {
-      if (key.indexOf(searchTerms[t]) !== -1) score++;
-    }
+    for (var t = 0; t < searchTerms.length; t++) { if (key.indexOf(searchTerms[t]) !== -1) score++; }
     var required = Math.min(2, Math.max(1, searchTerms.length - 1));
     
     if (score >= required) {
       var pData = combinedProducts[key];
       var chunk = 'Product: ' + pData.orig + '\n';
       var hasData = false;
-      
       for (var s in pData.sizes) {
         var finalMrp = pData.sizes[s].mrp || 'N/A';
         var finalDlp = pData.sizes[s].dlp || 'N/A';
         chunk += '- Size [' + s + '] : MRP Rs. ' + finalMrp + ' | DLP Rs. ' + finalDlp + '\n';
         hasData = true;
       }
-      
-      if (hasData) {
-        products.push({ name: pData.orig, score: score, chunk: chunk });
-      }
+      if (hasData) products.push({ name: pData.orig, score: score, chunk: chunk });
     }
   }
-  
   products.sort(function(a,b){ return b.score - a.score; });
   return products.slice(0, 5);
 }
@@ -212,10 +194,60 @@ function searchInvoices(query, invoiceMap) {
   return matches.slice(0, 5);
 }
 
+// ✅ MEGA-LEDGER: Computes detailed stats for AI to answer specific/custom questions instantly
+function generateDeepBusinessSummary(allRows) {
+    var custStats = {};
+    var monthStats = {};
+    var execStats = {};
+
+    for (var i=0; i<allRows.length; i++) {
+        var r = allRows[i];
+        if (!r['Invoice No']) continue;
+
+        var cName = (r['Customer Name'] || 'Unknown').trim();
+        var exec = (r['Sales Executive Name'] || 'Unknown').trim();
+        var vol = parseFloat(r['Product Volume']) || 0;
+        var val = parseFloat(r['Total Value incl VAT/GST']) || 0;
+
+        var dt = typeof r['Invoice Date'] === 'number' ? new Date(Math.round((r['Invoice Date'] - 25569) * 86400000)) : new Date(r['Invoice Date']);
+        var month = isNaN(dt.getTime()) ? 'Unknown' : dt.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+
+        if(!custStats[cName]) custStats[cName] = {vol:0, val:0};
+        custStats[cName].vol += vol;
+        custStats[cName].val += val;
+
+        if(!monthStats[month]) monthStats[month] = {vol:0, val:0};
+        monthStats[month].vol += vol;
+        monthStats[month].val += val;
+
+        if(!execStats[exec]) execStats[exec] = {vol:0, val:0};
+        execStats[exec].vol += vol;
+        execStats[exec].val += val;
+    }
+
+    var summary = "[DEEP DATA LEDGER FOR AI]\n\n";
+    summary += "-- MONTHLY TOTALS --\n";
+    for(var m in monthStats) { summary += "[" + m + "] Vol:" + monthStats[m].vol.toFixed(1) + "L, Val:Rs." + monthStats[m].val.toFixed(0) + "\n"; }
+    
+    summary += "\n-- ALL CUSTOMERS (Vol & Val) --\n";
+    // Sorted by volume to keep the most important ones at the top
+    var sortedCusts = Object.keys(custStats).sort(function(a,b){return custStats[b].vol - custStats[a].vol;});
+    for(var c=0; c<sortedCusts.length; c++) { 
+      var k = sortedCusts[c];
+      summary += "[CUST] " + k + " -> Vol:" + custStats[k].vol.toFixed(1) + "L, Val:Rs." + custStats[k].val.toFixed(0) + "\n"; 
+    }
+
+    summary += "\n-- SALES EXECUTIVES --\n";
+    for(var e in execStats) { summary += "[EXEC] " + e + " -> Vol:" + execStats[e].vol.toFixed(1) + "L, Val:Rs." + execStats[e].val.toFixed(0) + "\n"; }
+
+    // Slice to prevent token limit exceed (approx last 15000 chars is safe)
+    return summary.slice(0, 18000);
+}
+
 async function loadAllData() {
   if (globalCache && (Date.now() - lastCacheTime < 3600000)) return globalCache;
   var base = process.env.GITHUB_RAW_BASE;
-  if (!base) return { excelData: '', invoiceMap: {}, mrpMap: {}, dlpMap: {}, mrpFile: null, dlpFile: null };
+  if (!base) return { excelData: '', invoiceMap: {}, mrpMap: {}, dlpMap: {}, mrpFile: null, dlpFile: null, businessSummary: '' };
   
   var fileList = []; try { fileList = (await axios.get(base + '/index.json')).data; } catch(e) { return null; }
   
@@ -234,12 +266,16 @@ async function loadAllData() {
       for (var s = 0; s < wb.SheetNames.length; s++) { allRows = allRows.concat(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[s]], {defval:''})); } 
     } catch(e){}
   }
+  
   var invoiceMap = {}; 
   for (var m = 0; m < allRows.length; m++) { 
     var inv = allRows[m]['Invoice No'] || ''; 
     if(inv){ if(!invoiceMap[inv]) invoiceMap[inv] = []; invoiceMap[inv].push(allRows[m]); } 
   }
   
+  // Creates the mega-ledger for AI
+  var bizSummary = generateDeepBusinessSummary(allRows);
+
   var mrpFile = fileList.find(function(f){ return f.toLowerCase().includes('mrp') && f.match(/\.(xlsx|xls)$/i); });
   var mrpMap = {};
   if (mrpFile) {
@@ -260,24 +296,11 @@ async function loadAllData() {
     } catch(e) {}
   }
   
-  var lines = ['INVOICE DATABASE:','Format: InvNo|Date|Customer|Town|District|SalesExec|Products(Vol)|TotalVol|TotalWithGST|WithoutGST|CGST|SGST|Payment',''];
-  var invKeys = Object.keys(invoiceMap); 
-  for (var n = 0; n < invKeys.length; n++) { 
-    var invNo = invKeys[n]; var rows = invoiceMap[invNo]; var f = rows[0]; 
-    var prods = rows.map(function(r){ return r['Product Name'] + '(' + r['Product Volume'] + 'L)'; }).join(' + '); 
-    var tG = rows.reduce(function(s, r){ return s + (parseFloat(r['Total Value incl VAT/GST']) || 0); }, 0); 
-    var wG = rows.reduce(function(s, r){ return s + (parseFloat(r['Total Value Without GST']) || 0); }, 0); 
-    var cg = rows.reduce(function(s, r){ return s + (parseFloat(r['CGST Value']) || 0); }, 0); 
-    var sg = rows.reduce(function(s, r){ return s + (parseFloat(r['SGST Value']) || 0); }, 0); 
-    var vl = rows.reduce(function(s, r){ return s + (parseFloat(r['Product Volume']) || 0); }, 0); 
-    lines.push(invNo + '|' + cleanDate(f['Invoice Date']) + '|' + f['Customer Name'] + '|' + f['Town Name'] + '|' + f['District Name'] + '|' + f['Sales Executive Name'] + '|' + prods + '|' + vl.toFixed(1) + 'L|Rs.' + tG.toFixed(2) + '|Rs.' + wG.toFixed(2) + '|Rs.' + cg.toFixed(2) + '|Rs.' + sg.toFixed(2) + '|' + f['Mode Of Payement']); 
-  }
-  
   globalCache = { 
     invoiceMap: invoiceMap, 
     mrpMap: mrpMap, 
     dlpMap: dlpMap,
-    excelData: lines.join('\n'),
+    businessSummary: bizSummary,
     mrpFile: mrpFile,
     dlpFile: dlpFile
   };
@@ -291,8 +314,7 @@ async function getAIReply(userMsg, data, prompt) {
     var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', { 
       model: 'meta/llama-3.1-70b-instruct', 
       messages: [{ role: 'system', content: prompt + '\n\nCONTEXT DATA:\n' + data }, { role: 'user', content: userMsg }], 
-      // ✅ FIX: Increased tokens so AI can send long analytics reports
-      max_tokens: 1000, temperature: 0.1 
+      max_tokens: 800, temperature: 0.1 
     }, { headers: { 'Authorization': 'Bearer ' + key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 25000 }); 
     return sanitizeReply(res.data.choices[0].message.content) || 'Kuch error aaya.'; 
   } catch (e) { return 'System Error: ' + e.message; }
@@ -338,7 +360,8 @@ module.exports = async function(req, res) {
             var m = pending.matches[idx]; var f = m.rows[0];
             var prods = m.rows.map(function(r){ return r['Product Name'] + '(' + r['Product Volume'] + 'L)'; }).join(' + ');
             var tG = m.rows.reduce(function(s, r){ return s + (parseFloat(r['Total Value incl VAT/GST']) || 0); }, 0);
-            await sendText(from, '*Invoice:* ' + m.invNo + '\n*Customer:* ' + f['Customer Name'] + '\n*Products:* ' + prods + '\n*Total:* Rs.' + tG.toFixed(2) + '\n*Date:* ' + cleanDate(f['Invoice Date']) + '\n*Payment:* ' + f['Mode Of Payement']);
+            var vl = m.rows.reduce(function(s, r){ return s + (parseFloat(r['Product Volume']) || 0); }, 0);
+            await sendText(from, '*Invoice:* ' + m.invNo + '\n*Customer:* ' + f['Customer Name'] + '\n*Products:* ' + prods + '\n*Total Value:* Rs.' + tG.toFixed(2) + '\n*Total Volume:* ' + vl.toFixed(1) + ' L\n*Date:* ' + cleanDate(f['Invoice Date']) + '\n*Payment:* ' + f['Mode Of Payement']);
           } else if (pending.type === 'product') {
             var p = pending.matches[idx];
             var context = '[PRICE DATA]\n' + p.chunk;
@@ -390,7 +413,8 @@ module.exports = async function(req, res) {
       var m = invMatches[0]; var f = m.rows[0];
       var prods = m.rows.map(function(r){ return r['Product Name'] + '(' + r['Product Volume'] + 'L)'; }).join(' + ');
       var tG = m.rows.reduce(function(s, r){ return s + (parseFloat(r['Total Value incl VAT/GST']) || 0); }, 0);
-      await sendText(from, '*Invoice:* ' + m.invNo + '\n*Customer:* ' + f['Customer Name'] + '\n*Products:* ' + prods + '\n*Total:* Rs.' + tG.toFixed(2) + '\n*Date:* ' + cleanDate(f['Invoice Date']) + '\n*Payment:* ' + f['Mode Of Payement']);
+      var vl = m.rows.reduce(function(s, r){ return s + (parseFloat(r['Product Volume']) || 0); }, 0);
+      await sendText(from, '*Invoice:* ' + m.invNo + '\n*Customer:* ' + f['Customer Name'] + '\n*Products:* ' + prods + '\n*Total Value:* Rs.' + tG.toFixed(2) + '\n*Total Volume:* ' + vl.toFixed(1) + ' L\n*Date:* ' + cleanDate(f['Invoice Date']) + '\n*Payment:* ' + f['Mode Of Payement']);
       return res.status(200).json({ status: 'ok' });
     } else if (invMatches.length > 1) {
       var msg = '*Multiple invoices found. Number reply karein:*\n\n';
@@ -401,23 +425,26 @@ module.exports = async function(req, res) {
       return res.status(200).json({ status: 'ok' });
     }
 
-    // ✅ FIX: CUSTOM ANALYTICS ENGINE
-    // Ye block top customers, total volume, sales executive wise report handle karega
-    var isAnalytics = ['top', 'highest', 'total', 'month', 'volume', 'sales', 'executive', 'report', 'summary', 'sabse', 'zyada', 'kam', 'hisab', 'bika', 'biki', 'kaun', 'kisne'].some(function(w){return lower.indexOf(w)!==-1;});
+    // ✅ SUPER-SMART NLP ENGINE FOR ANY OTHER QUESTION
+    // Keyword based routing + length fallback
+    var isAnalytics = ['top', 'highest', 'total', 'month', 'volume', 'sales', 'executive', 'report', 'summary', 'sabse', 'zyada', 'kam', 'hisab', 'bika', 'kaun', 'kisne', 'kiska', 'din', 'hafts', 'week', 'mahine', 'saal', 'aaj', 'kal', 'kitna', 'customer', 'kya'].some(function(w){return lower.indexOf(w)!==-1;});
 
-    if (isAnalytics || lower.length > 10) {
-      var customPrompt = 'User Query: "' + text + '"\n\nInstructions:\n1. Check if the user is asking about top customers, volumes, sales executives, monthly totals, or highest bills. If YES, analyze the INVOICE DATABASE in the context below and give an accurate numeric answer in Hinglish.\n2. Format: Plain text only. NO EMOJIS, NO SYMBOLS. Use "Rs." instead of the Rupee symbol.';
-      var customReply = await getAIReply(customPrompt, dataResult.excelData, sysPrompt);
+    if (isAnalytics || lower.length > 5) {
+      // AI instructions to act as a data analyst with a safe fallback
+      var customPrompt = 'User Query: "' + text + '"\n\nInstructions:\n1. You are a Data Analyst. The user might ask questions in Hindi, Hinglish, English, or local slang.\n2. Look at the [DEEP DATA LEDGER FOR AI] below which contains exact pre-calculated volumes and values for all customers and months.\n3. If the user asks about a specific customer (e.g., "Ramesh ka volume batao"), find that customer in the ledger and report their stats accurately.\n4. If the user asks for a time period (e.g., "April ka sales"), find it in the monthly totals.\n5. If the data is NOT in the ledger, or if the question is completely unrelated to business, YOU MUST REPLY EXACTLY WITH: "Please wait, admin will reply soon." DO NOT guess or invent numbers.\n6. Format your answer nicely in plain Hinglish text. NO EMOJIS. Use "Rs." for currency.';
       
-      if (!customReply || customReply.indexOf('Error') !== -1 || customReply.indexOf('missing') !== -1) {
-        await sendText(from, 'Maaf kijiye, is sawal ka data mujhe abhi database me nahi mila.');
+      var customReply = await getAIReply(customPrompt, dataResult.businessSummary, sysPrompt);
+      
+      if (!customReply || customReply.indexOf('Error') !== -1 || customReply.toLowerCase().indexOf('admin will reply soon') !== -1) {
+        await sendText(from, 'Please wait, admin will reply soon.');
       } else {
         await sendText(from, customReply);
       }
       return res.status(200).json({ status: 'ok' });
     }
 
-    await sendText(from, 'Main Invoices, Product Rates (MRP/DLP), aur Sales Analytics batane ke liye bani hoon. Sahi sawal puchein.');
+    // Fallback for random gibberish
+    await sendText(from, 'Please wait, admin will reply soon.');
     return res.status(200).json({ status: 'ok' });
   } catch (e) {
     console.error('[WH] Fatal:', e.message, e.stack);
