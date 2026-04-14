@@ -32,16 +32,10 @@ async function saveSystemPrompt(p) { var d = getFirebase(); if (d) { try { await
 async function getPDFList() { var d = getFirebase(); if (!d) return {}; try { var s = await d.ref('botConfig/pdfFiles').get(); return s.exists() ? s.val() : {}; } catch(e){ return {}; } }
 async function savePDFList(data) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/pdfFiles').set(data); } catch(e){} } }
 
-// ─── HELPERS & AGGRESSIVE SANITIZER ────────────────────────────────────────
+// ─── HELPERS ───────────────────────────────────────────────────────────────
 function sanitizeReply(t) {
     if (!t) return '';
-    // Replace known currency artifacts with Rs.
-    var clean = t.replace(/₹/g, 'Rs.').replace(/â‚¹/g, 'Rs.');
-    
-    // MEGA FIX: Strip ALL emojis and weird UTF-8 artifacts. Only keep basic text, numbers, and basic punctuation.
-    clean = clean.replace(/[^\x20-\x7E\n]/g, '');
-    
-    return clean.replace(/\*\*/g, '*').replace(/\n{3,}/g, '\n\n').split('\n').map(function(l){return l.trim();}).join('\n').trim();
+    return t.replace(/[❌✅✨🔍📄📋📊💰]/g, '').replace(/₹/g, 'Rs.').replace(/â‚¹/g, 'Rs.').replace(/\*\*/g, '*').replace(/\n{3,}/g, '\n\n').split('\n').map(function(l){return l.trim();}).join('\n').trim();
 }
 
 function getTimestamp(val) {
@@ -117,6 +111,7 @@ function extractDateRange(text) {
     return null;
 }
 
+// ✅ FIX: Extract any number user gives (e.g. Top 6, Top 12)
 function extractLimit(text) { 
     var m = text.match(/(?:top|sabse|highest|best)\s*(\d{1,3})/i); 
     if (m) return parseInt(m[1]);
@@ -383,7 +378,7 @@ function generateDeepBusinessSummary(allRows) {
     
     summary += "\n-- ALL CUSTOMERS (Vol & Val) --\n";
     var sortedCusts = Object.keys(custStats).sort(function(a,b){return custStats[b].vol - custStats[a].vol;});
-    for(var c=0; c<sortedCusts.length; c++) { var k = sortedCusts[c]; summary += "[CUST] " + k + " -> Vol:" + custStats[k].vol.toFixed(1) + "L, Val:Rs." + custStats[k].val.toFixed(0) + "\n"; }
+    for(var c=0; c<Math.min(sortedCusts.length, 30); c++) { var k = sortedCusts[c]; summary += "[CUST] " + k + " -> Vol:" + custStats[k].vol.toFixed(1) + "L, Val:Rs." + custStats[k].val.toFixed(0) + "\n"; }
 
     summary += "\n-- SALES EXECUTIVES --\n";
     for(var e in execStats) { summary += "[EXEC] " + e + " -> Vol:" + execStats[e].vol.toFixed(1) + "L, Val:Rs." + execStats[e].val.toFixed(0) + "\n"; }
@@ -407,10 +402,10 @@ async function loadAllData() {
     lastCacheTime = Date.now(); console.log('[CACHE] Loaded.'); return globalCache;
 }
 
-// ─── AI REPLY ──────────────────────────────────────────────────────────────
+// ─── AI REPLY (FAST FALLBACK) ──────────────────────────────────────────────
 async function getAIReply(userMsg, contextData, prompt) {
     var key = process.env.NVIDIA_API_KEY; if (!key) return null;
-    try { var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', { model: 'meta/llama-3.1-70b-instruct', messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'CONTEXT DATA:\n' + contextData + '\n\nUSER QUERY: ' + userMsg }], max_tokens: 800, temperature: 0.1 }, { headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 30000 }); var reply = res.data.choices[0].message.content; if (!reply) return null; return sanitizeReply(reply); } catch (e) { return null; }
+    try { var res = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', { model: 'meta/llama-3.1-70b-instruct', messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'CONTEXT DATA:\n' + contextData + '\n\nUSER QUERY: ' + userMsg }], max_tokens: 300, temperature: 0.1 }, { headers: { 'Authorization': 'Bearer '+key, 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 10000 }); var reply = res.data.choices[0].message.content; if (!reply || reply.toLowerCase().includes('cannot') || reply.toLowerCase().includes('not found') || reply.toLowerCase().includes('admin will reply')) return null; return sanitizeReply(reply); } catch (e) { return null; }
 }
 
 async function sendText(to, text) { var base = (process.env.EVOLUTION_API_URL||'').replace(/\/$/,''); var inst = process.env.EVOLUTION_INSTANCE; var key = process.env.EVOLUTION_API_KEY; var num = to.replace(/@s\.whatsapp\.net$/,'').replace(/@g\.us$/,''); if (!base||!inst||!key) return; try { await axios.post(base+'/message/sendText/'+inst,{number:num,text:text},{headers:{'Content-Type':'application/json','apikey':key}}); } catch(e){} }
@@ -436,7 +431,7 @@ module.exports = async function(req, res) {
         var sysPrompt = results[0]; var dataResult = results[1]||{}; var savedPDFs = results[2];
         var invoiceMap = dataResult.invoiceMap || {}; var mrpMap = dataResult.mrpMap || {}; var dlpMap = dataResult.dlpMap || {}; var allRows = dataResult.allRows || [];
 
-        // ── PENDING SELECTION ──────────────────────────────────────────────
+        // ── PENDING SELECTION (1, 2, 3) ────────────────────────────────────
         if (/^\d+$/.test(text)) {
             var pending = null;
             try { var snap = await database.ref('pending/' + safeFrom).get(); if(snap.exists()) pending = snap.val(); } catch(e){}
@@ -473,15 +468,16 @@ module.exports = async function(req, res) {
         if (hasSend && hasDLP  && dataResult.listPdfUrl) { await sendDocument(from, dataResult.listPdfUrl, dataResult.listPdfFile, dataResult.listPdfFile); return res.status(200).json({status:'ok'}); }
         for (var k in savedPDFs) { if (lower.includes(k) && hasSend) { await sendDocument(from, savedPDFs[k].url, savedPDFs[k].name, savedPDFs[k].name); return res.status(200).json({status:'ok'}); } }
 
-        // ── 1. EXACT ANALYTICS ROUTING (Bypasses Product/Invoice Search) ───
+        // ── ✅ 1. ISOLATE ANALYTICS ROUTING FIRST ────────────
         var qIntent = parseDataQuery(text);
         
-        if (lower.match(/top.*(cust|party|log|client|dukandar|dukan)/) || lower.match(/(highest|zyada|sabse).*cust/)) qIntent.type = 'top_customers';
+        // Very Strict Regex to Prevent Accidental Triggers
+        if (lower.match(/top.*(cust|coust|party|log|client|dukandar|dukan)/) || lower.match(/(highest|zyada|sabse).*(cust|coust)/)) qIntent.type = 'top_customers';
         else if (lower.match(/top.*(prod|item|oil|brand|maal)/) || lower.match(/(highest|zyada|sabse).*prod/)) qIntent.type = 'top_products';
         else if (lower.match(/\b(se|se wise|executive|exec|salesman)\b/)) qIntent.type = 'executive_report';
-        else if (lower.match(/\b(total volume|sales summary|kitna bika|total sale)\b/)) qIntent.type = 'period_summary';
+        else if (lower.match(/\b(total volume|sales summary|kitna bika|total sale)\b/) || (lower.includes('volume') && lower.includes('month'))) qIntent.type = 'period_summary';
 
-        // Set Default "Current Month" if Date is missing for Analytics
+        // Auto Set Default Month if Date is missing for Analytics
         if (qIntent.type && !qIntent.filters.dateRange) {
             var now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
             var cy = now.getFullYear(); var cm = now.getMonth();
@@ -511,7 +507,7 @@ module.exports = async function(req, res) {
             }
         }
 
-        // ── 2. PRICE & INVOICE SEARCH (Runs only if NOT analytics) ──────────
+        // ── 2. PRICE & INVOICE SEARCH ──────────
         var isRateQ = ['rate','price','mrp','dlp','kitne ka','dam','rupay'].some(function(w){return lower.includes(w);});
         var prodMatches = searchProducts(text, mrpMap, dlpMap); 
         var invMatches  = searchInvoices(text, invoiceMap); 
@@ -525,24 +521,36 @@ module.exports = async function(req, res) {
         if (invMatches.length === 1) { var m2 = invMatches[0]; var f2 = m2.rows[0]; var prods2 = m2.rows.map(function(r){return r['Product Name']+'('+r['Product Volume']+'L)';}).join(' + '); var tG2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Total Value incl VAT/GST'])||0);},0); var vl2 = m2.rows.reduce(function(s,r){return s+(parseFloat(r['Product Volume'])||0);},0); await sendText(from, '*Invoice:* '+m2.invNo+'\n*Customer:* '+f2['Customer Name']+'\n*Products:* '+prods2+'\n*Total Value:* Rs.'+tG2.toFixed(2)+'\n*Total Volume:* '+vl2.toFixed(1)+' L\n*Date:* '+cleanDate(f2['Invoice Date'])+'\n*Payment:* '+f2['Mode Of Payement']); return res.status(200).json({status:'ok'}); }
         if (invMatches.length > 1) { var msg2 = '*Multiple invoices. Number reply karein:*\n\n'; invMatches.forEach(function(m,i){ msg2 += (i+1)+'. '+m.customer+' ('+m.invNo+')\n'; }); var pend2 = { type:'invoice', matches:invMatches, ts:Date.now() }; try { await database.ref('pending/'+safeFrom).set(pend2); } catch(e){} memoryPending[safeFrom] = pend2; await sendText(from, msg2); return res.status(200).json({status:'ok'}); }
 
-        // ── 3. AI DATA ANALYST FALLBACK (For custom questions like "lowest selling") ──
-        var isCustomAnalytics = ['sabse', 'kam', 'lowest', 'aaj', 'kal', 'din', 'bika', 'invoice', 'bill', 'hisab'].some(function(w){return lower.includes(w);});
-
-        if (isCustomAnalytics) {
-            var aiPrompt = 'You are a Data Analyst. Answer the user query using ONLY the CONTEXT DATA below.\n\nRULES:\n1. If asked about lowest/highest selling, specific dates (e.g. 3 April), today invoices, or custom data, find it in the data.\n2. Write in plain Hinglish. NO EMOJIS. Use "Rs." for currency.\n3. Add this exactly at the end of your answer: "\n*(Note: AI generated data, please reverify)*"\n4. If data is missing or query is unrelated, output EXACTLY: "Please wait, admin will reply soon."';
-            
-            // Generate a mini-ledger for AI to read
-            var bizSummary = generateDeepBusinessSummary(allRows);
-            var aiContext = "[BUSINESS LEDGER]\n" + bizSummary + "\n\n[INVOICE RAW DATA]\n" + dataResult.excelData.substring(0, 15000);
-            
-            var customReply = await getAIReply(text, aiContext, aiPrompt);
-            
-            if (!customReply || customReply.toLowerCase().includes('admin will reply') || customReply.toLowerCase().includes('error')) {
-                await sendText(from, 'Please wait, admin will reply soon.');
+        // ── 3. SPECIFIC CUSTOMER SEARCH (FAST MATCH) ───────────────────
+        var cMatches = searchCustomers(text, invoiceMap);
+        var isCustQuery = ['bill', 'invoice', 'khata', 'hisab', 'data', 'report', 'ka', 'ki', 'batao'].some(function(w){return lower.includes(w);});
+        
+        if (cMatches.length > 0 && cMatches[0].score >= 30 && (isCustQuery || lower.includes(cMatches[0].name.toLowerCase()))) {
+            if (cMatches.length === 1 || (cMatches.length > 1 && cMatches[0].score > cMatches[1].score + 20)) {
+                var cReport = getCustomerReport(cMatches[0].name, invoiceMap, qIntent.filters.dateRange, false);
+                await sendText(from, cReport);
+                return res.status(200).json({ status: 'ok' });
             } else {
-                await sendText(from, customReply);
+                var cMsg = '*Kaunse customer ka data dekhna hai? Number reply karein:*\n\n';
+                cMatches.forEach(function(c,i){ cMsg += (i+1)+'. '+c.name+'\n'; });
+                var cPend = { type:'customer_report', matches:cMatches, dateRange:qIntent.filters.dateRange, lastOnly:false, ts:Date.now() };
+                try { await database.ref('pending/'+safeFrom).set(cPend); } catch(e){}
+                memoryPending[safeFrom] = cPend;
+                await sendText(from, cMsg);
+                return res.status(200).json({ status: 'ok' });
             }
-            return res.status(200).json({ status: 'ok' });
+        }
+
+        // ── 4. ULTIMATE AI FALLBACK ENGINE (For weird/long queries) ──────────
+        if (lower.length > 5) {
+            var aiPrompt = 'User Query: "' + text + '"\n\nInstructions:\n1. You are a Data Analyst. Answer using ONLY the [BUSINESS LEDGER] below.\n2. Write in plain Hinglish. NO EMOJIS.\n3. Add EXACTLY this at the end of your answer: "\n*(Note: Data may incorrect please reverify)*"\n4. If data is not found or query is unrelated, reply EXACTLY: "Please wait, admin will reply soon."';
+            var bizSummary = generateDeepBusinessSummary(allRows);
+            var aiReply = await getAIReply(text, "[BUSINESS LEDGER]\n" + bizSummary, aiPrompt);
+            
+            if (aiReply && !aiReply.toLowerCase().includes('admin will reply soon')) {
+                await sendText(from, aiReply);
+                return res.status(200).json({ status: 'ok' });
+            }
         }
 
         // Final Ultimate Fallback
