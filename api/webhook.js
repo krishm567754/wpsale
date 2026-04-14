@@ -24,7 +24,7 @@ function sanitizePath(str) { return str.replace(/[@.\[\]#\$\/]/g, '_'); }
 
 async function getSystemPrompt() {
     var d = getFirebase();
-    var def = 'Tu Laxmi hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf CONTEXT DATA se jawab de. Kuch bhi invent mat kar.\n2. 0.9L aur 900ml dono same hote hain.\n3. Exact Size ki value batayein jo user ne puchi hai.\n4. Format: *Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n5. Text Hinglish me rakho.\n6. Emojis ya special symbols bilkul use mat karo. Rupee sign ki jagah sirf "Rs." likho.\n7. Agar data na mile to exactly likho: "Please wait, admin will reply soon."';
+    var def = 'Tu Krish hai - Shri Laxmi Auto Store, Bikaner ki WhatsApp Assistant.\n\nSTRICT RULES:\n1. Sirf CONTEXT DATA se jawab de. Kuch bhi invent mat kar.\n2. 0.9L aur 900ml dono same hote hain.\n3. Exact Size ki value batayein jo user ne puchi hai.\n4. Format: *Product:* Name (Size)\n*MRP:* Rs.X\n*DLP:* Rs.Y\n5. Text Hinglish me rakho.\n6. Emojis ya special symbols bilkul use mat karo. Rupee sign ki jagah sirf "Rs." likho.\n7. Agar data na mile to exactly likho: "Please wait, admin will reply soon."';
     if (!d) return def;
     try { var s = await d.ref('botConfig/systemPrompt').get(); return s.exists() ? s.val() : def; } catch (e) { return def; }
 }
@@ -146,10 +146,10 @@ function searchInvoices(query, invoiceMap) {
     return matches.slice(0, 5);
 }
 
-// ─── CUSTOMER SEARCH (Improved for partial matches) ────────────────────────
+// ─── CUSTOMER SEARCH (STRICT + NUMBERED SELECTION) ─────────────────────────
 function searchCustomers(query, invoiceMap) {
     var q = query.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
-    var stopWords = ['ka','ki','ke','ko','batao','dikhao','data','report','invoice','bill','total','volume','wale','wali','mahine','month','week','hafte','is','this','last','pichle','aaj','today'];
+    var stopWords = ['ka','ki','ke','ko','batao','dikhao','data','report','invoice','bill','total','volume','wale','wali','mahine','month','week','hafte','is','this','last','pichle','aaj','today','ne','liya','hai','ke','all','sab','poora'];
     var words = q.split(/\s+/).filter(function(w){ return w.length > 2 && stopWords.indexOf(w) === -1; });
     if (words.length === 0) return [];
     
@@ -162,12 +162,40 @@ function searchCustomers(query, invoiceMap) {
     var matches = [];
     for (var cName in custSet) {
         var cLower = cName.toLowerCase().replace(/[^a-z0-9 ]/g, '');
-        var score = words.filter(function(w){ return cLower.indexOf(w) !== -1; }).length;
-        // Also check if any single word is a strong match (>=3 chars)
-        var strongMatch = words.some(function(w){ return w.length >= 3 && cLower.indexOf(w) !== -1; });
-        if (score > 0 || strongMatch) matches.push({ name: cName, score: score + (strongMatch ? 1 : 0) });
+        var score = 0;
+        var exactMatch = false;
+        
+        // Check for exact phrase match first (strongest)
+        if (cLower.indexOf(q) !== -1) {
+            exactMatch = true;
+            score = 100;
+        } else {
+            // Score based on word matches
+            for (var i = 0; i < words.length; i++) {
+                if (cLower.indexOf(words[i]) !== -1) {
+                    score++;
+                    // Bonus for longer word matches
+                    if (words[i].length >= 5) score += 2;
+                }
+            }
+        }
+        
+        if (score > 0) {
+            matches.push({ 
+                name: cName, 
+                score: score,
+                exact: exactMatch
+            });
+        }
     }
-    matches.sort(function(a,b){ return b.score - a.score; });
+    
+    // Sort: exact matches first, then by score
+    matches.sort(function(a,b){
+        if (a.exact && !b.exact) return -1;
+        if (!a.exact && b.exact) return 1;
+        return b.score - a.score;
+    });
+    
     return matches.slice(0, 5);
 }
 
@@ -175,6 +203,10 @@ function searchCustomers(query, invoiceMap) {
 function detectQueryIntent(text) {
     var lower = text.toLowerCase();
 
+    // Product vs Customer detection
+    var hasProductKeywords = ['activ','gtx','magnatec','edge','crb','rx','vecton','transmax','spheerol','radicool','power1','fork oil','brake fluid','grease'].some(function(w){return lower.indexOf(w)!==-1;});
+    var hasCustomerKeywords = ['enterprises','service','center','motors','traders','dealers','wale','wali','ka','ki','ke','ne','liya'].some(function(w){return lower.indexOf(' '+w+' ')!==-1 || lower.indexOf(w+' ')===0;});
+    
     // Date range keywords
     var hasThisMonth  = ['is month','this month','mahine','is mahine','current month','aaj ka mahina'].some(function(w){return lower.indexOf(w)!==-1;});
     var hasLastMonth  = ['last month','pichle mahine','pichla mahina','previous month'].some(function(w){return lower.indexOf(w)!==-1;});
@@ -182,11 +214,14 @@ function detectQueryIntent(text) {
     var hasLastWeek   = ['last week','pichle hafte','pichla hafte'].some(function(w){return lower.indexOf(w)!==-1;});
     var hasToday      = ['aaj','today','aaj ke'].some(function(w){return lower.indexOf(w)!==-1;});
     var hasAll        = ['all','saare','sab','poora','history','purana','pichla sab'].some(function(w){return lower.indexOf(w)!==-1;});
-    var hasTop        = ['top','highest','sabse zyada','best','max'].some(function(w){return lower.indexOf(w)!==-1;});
+    
+    // Query type keywords
+    var hasTop        = ['top','highest','sabse zyada','best','max','zyada bika'].some(function(w){return lower.indexOf(w)!==-1;});
+    var hasProduct    = ['product','item','maal','oil','lubricant'].some(function(w){return lower.indexOf(w)!==-1;});
     var hasExec       = ['executive','salesman','jagdish','daya','rakesh','gajanand','naresh'].some(function(w){return lower.indexOf(w)!==-1;});
-    var hasCustomer   = ['ka','ki','ke','wale','customer'].some(function(w){return lower.indexOf(' '+w+' ')!==-1 || lower.indexOf(w+' ')===0;});
+    var hasCustomer   = ['customer','ka','ki','ke','wale'].some(function(w){return lower.indexOf(' '+w+' ')!==-1 || lower.indexOf(w+' ')===0;});
     var hasInvoice    = ['invoice','bill','inv'].some(function(w){return lower.indexOf(w)!==-1;});
-    var hasSummary    = ['summary','report','total','kitna','volume','sale','bika','hisab'].some(function(w){return lower.indexOf(w)!==-1;});
+    var hasSummary    = ['summary','report','total','kitna','volume','sale','bika','hisab','liter'].some(function(w){return lower.indexOf(w)!==-1;});
 
     // Date filter determine karo
     var dateFilter = 'all';
@@ -197,11 +232,29 @@ function detectQueryIntent(text) {
     else if (hasLastMonth) dateFilter = 'last_month';
     else if (hasAll)       dateFilter = 'all';
 
-    if (hasTop)    return { type: 'top_customers', dateFilter: dateFilter };
-    if (hasExec)   return { type: 'executive_report', dateFilter: dateFilter };
+    // ── TOP PRODUCTS (not customers) ──────────────────────────────────────
+    if (hasTop && hasProduct && !hasCustomer) {
+        return { type: 'top_products', dateFilter: dateFilter };
+    }
+    
+    // ── TOP CUSTOMERS ─────────────────────────────────────────────────────
+    if (hasTop && !hasProduct) {
+        return { type: 'top_customers', dateFilter: dateFilter };
+    }
+    
+    // ── EXECUTIVE REPORT ──────────────────────────────────────────────────
+    if (hasExec) {
+        return { type: 'executive_report', dateFilter: dateFilter };
+    }
 
-    if (hasCustomer || hasSummary || (hasInvoice && !lower.match(/inv\/\d/i))) {
+    // ── CUSTOMER-SPECIFIC QUERIES ─────────────────────────────────────────
+    if (hasCustomerKeywords || (hasCustomer && !hasProduct) || (hasInvoice && !lower.match(/inv\/\d/i)) || hasSummary) {
         return { type: 'customer_query', dateFilter: dateFilter };
+    }
+
+    // ── PRODUCT RATE QUERY ────────────────────────────────────────────────
+    if (hasProductKeywords) {
+        return { type: 'product_rate', dateFilter: 'all' };
     }
 
     return { type: 'general' };
@@ -314,6 +367,41 @@ function getTopCustomers(invoiceMap, dateFilter, limit) {
     return msg;
 }
 
+// ─── ✅ NEW: TOP PRODUCTS REPORT (by volume sold) ──────────────────────────
+function getTopProducts(allRows, dateFilter, limit) {
+    limit = limit || 5;
+    var range = getDateRange(dateFilter);
+    var prodMap = {};
+
+    for (var i = 0; i < allRows.length; i++) {
+        var r = allRows[i];
+        if (!r['Invoice No']) continue;
+        
+        // Date filter
+        if (range && !isInRange(r['Invoice Date'], range)) continue;
+        
+        var prodName = (r['Product Name'] || 'Unknown').trim();
+        var vol = parseFloat(r['Product Volume']) || 0;
+        var val = parseFloat(r['Total Value incl VAT/GST']) || 0;
+        
+        if (!prodMap[prodName]) prodMap[prodName] = { vol: 0, val: 0, count: 0 };
+        prodMap[prodName].vol += vol;
+        prodMap[prodName].val += val;
+        prodMap[prodName].count++;
+    }
+
+    var sorted = Object.keys(prodMap).sort(function(a,b){ return prodMap[b].vol - prodMap[a].vol; }).slice(0, limit);
+    if (sorted.length === 0) return 'Is period mein koi product data nahi mila.';
+
+    var periodLabel = dateFilter === 'all' ? 'All Time' : dateFilter.replace('_',' ').replace(/\b\w/g,function(c){return c.toUpperCase();});
+    var msg = '*Top ' + limit + ' Products by Volume Sold (' + periodLabel + ')*\n\n';
+    sorted.forEach(function(name, i){
+        var s = prodMap[name];
+        msg += (i+1) + '. ' + name + '\n   Vol: ' + s.vol.toFixed(1) + 'L | Val: Rs.' + s.val.toFixed(0) + ' | Times Sold: ' + s.count + '\n\n';
+    });
+    return msg;
+}
+
 // ─── EXECUTIVE REPORT ──────────────────────────────────────────────────────
 function getExecutiveReport(invoiceMap, dateFilter) {
     var range   = getDateRange(dateFilter);
@@ -367,23 +455,28 @@ function getDateWiseSummary(invoiceMap, dateFilter) {
 
 // ─── DEEP BUSINESS SUMMARY (for AI fallback) ───────────────────────────────
 function generateDeepBusinessSummary(allRows) {
-    var custStats = {}, monthStats = {}, execStats = {};
+    var custStats = {}, monthStats = {}, execStats = {}, prodStats = {};
     for (var i = 0; i < allRows.length; i++) {
         var r = allRows[i]; if (!r['Invoice No']) continue;
         var cName = (r['Customer Name'] || 'Unknown').trim();
         var exec  = (r['Sales Executive Name'] || 'Unknown').trim();
+        var prod  = (r['Product Name'] || 'Unknown').trim();
         var vol   = parseFloat(r['Product Volume']) || 0;
         var val   = parseFloat(r['Total Value incl VAT/GST']) || 0;
         var dt    = typeof r['Invoice Date'] === 'number' ? new Date(Math.round((r['Invoice Date']-25569)*86400000)) : new Date(r['Invoice Date']);
         var month = isNaN(dt.getTime()) ? 'Unknown' : dt.toLocaleString('en-US',{month:'short',year:'numeric'});
+        
         if (!custStats[cName])  custStats[cName]  = {vol:0,val:0};  custStats[cName].vol  += vol; custStats[cName].val  += val;
         if (!monthStats[month]) monthStats[month] = {vol:0,val:0};  monthStats[month].vol += vol; monthStats[month].val += val;
         if (!execStats[exec])   execStats[exec]   = {vol:0,val:0};  execStats[exec].vol   += vol; execStats[exec].val   += val;
+        if (!prodStats[prod])   prodStats[prod]   = {vol:0,val:0};  prodStats[prod].vol   += vol; prodStats[prod].val   += val;
     }
     var summary = '[BUSINESS DATA]\n\n-- MONTHLY --\n';
     for (var m in monthStats) summary += '['+m+'] Vol:'+monthStats[m].vol.toFixed(1)+'L Val:Rs.'+monthStats[m].val.toFixed(0)+'\n';
     summary += '\n-- CUSTOMERS --\n';
-    Object.keys(custStats).sort(function(a,b){return custStats[b].vol-custStats[a].vol;}).forEach(function(k){ summary += '[CUST] '+k+' Vol:'+custStats[k].vol.toFixed(1)+'L Val:Rs.'+custStats[k].val.toFixed(0)+'\n'; });
+    Object.keys(custStats).sort(function(a,b){return custStats[b].vol-custStats[a].vol;}).slice(0,20).forEach(function(k){ summary += '[CUST] '+k+' Vol:'+custStats[k].vol.toFixed(1)+'L Val:Rs.'+custStats[k].val.toFixed(0)+'\n'; });
+    summary += '\n-- PRODUCTS --\n';
+    Object.keys(prodStats).sort(function(a,b){return prodStats[b].vol-prodStats[a].vol;}).slice(0,20).forEach(function(k){ summary += '[PROD] '+k+' Vol:'+prodStats[k].vol.toFixed(1)+'L Val:Rs.'+prodStats[k].val.toFixed(0)+'\n'; });
     summary += '\n-- EXECUTIVES --\n';
     for (var e in execStats) summary += '[EXEC] '+e+' Vol:'+execStats[e].vol.toFixed(1)+'L Val:Rs.'+execStats[e].val.toFixed(0)+'\n';
     return summary.slice(0, 18000);
@@ -483,6 +576,7 @@ module.exports = async function(req, res) {
         var invoiceMap = dataResult.invoiceMap || {};
         var mrpMap     = dataResult.mrpMap     || {};
         var dlpMap     = dataResult.dlpMap     || {};
+        var allRows    = dataResult.allRows    || [];
 
         // ── PENDING NUMBER SELECTION ──────────────────────────────────────
         if (/^\d+$/.test(text)) {
@@ -533,10 +627,10 @@ module.exports = async function(req, res) {
         if (isAdmin && text.indexOf('!removepdf ') === 0) { var kw = text.slice(11).trim().toLowerCase(); var pl2 = await getPDFList(); if(pl2[kw]){delete pl2[kw]; await savePDFList(pl2); await sendText(from,'Removed: '+kw);} else await sendText(from,'Not found: '+kw); return res.status(200).json({ status: 'ok' }); }
         if (isAdmin && text === '!help') { await sendText(from, '*Admin Commands:*\n!status\n!setprompt [text]\n!clearcache\n!addpdf keyword|Name|URL\n!listpdf\n!removepdf keyword'); return res.status(200).json({ status: 'ok' }); }
 
-        // ── GREETING ──────────────────────────────────────────────────────
+        // ── GREETING (Krish name) ─────────────────────────────────────────
         var lower = text.toLowerCase();
         if (['hi','hello','namaste','hey','hii','good morning','kaise ho','helo'].some(function(g){return lower===g||lower.startsWith(g+' ');})) {
-            await sendText(from, 'Hello! Main Laxmi hoon, Shri Laxmi Auto Store ki assistant.\nInvoice details, MRP/DLP rates, customer reports pooch sakte hain!');
+            await sendText(from, 'Hello! Main Krish hoon, Shri Laxmi Auto Store ki assistant.\nInvoice details, MRP/DLP rates, customer reports pooch sakte hain!');
             return res.status(200).json({ status: 'ok' });
         }
 
@@ -588,28 +682,37 @@ module.exports = async function(req, res) {
             return res.status(200).json({status:'ok'});
         }
 
-        // ── SMART CUSTOMER/ANALYTICS QUERIES ─────────────────────────────
+        // ── ✅ SMART QUERY HANDLING ───────────────────────────────────────
         var qIntent = detectQueryIntent(text);
         console.log('[INTENT] type:'+qIntent.type+' dateFilter:'+qIntent.dateFilter+' query:'+text);
 
-        if (qIntent.type === 'top_customers') {
-            var topReport = getTopCustomers(invoiceMap, qIntent.dateFilter, 5);
-            await sendText(from, topReport);
+        // ✅ TOP PRODUCTS (by volume sold)
+        if (qIntent.type === 'top_products') {
+            var topProdReport = getTopProducts(allRows, qIntent.dateFilter, 5);
+            await sendText(from, topProdReport);
             return res.status(200).json({status:'ok'});
         }
 
+        // ✅ TOP CUSTOMERS
+        if (qIntent.type === 'top_customers') {
+            var topCustReport = getTopCustomers(invoiceMap, qIntent.dateFilter, 5);
+            await sendText(from, topCustReport);
+            return res.status(200).json({status:'ok'});
+        }
+
+        // ✅ EXECUTIVE REPORT
         if (qIntent.type === 'executive_report') {
             var execReport = getExecutiveReport(invoiceMap, qIntent.dateFilter);
             await sendText(from, execReport);
             return res.status(200).json({status:'ok'});
         }
 
+        // ✅ CUSTOMER-SPECIFIC QUERIES (with strict matching + numbered selection)
         if (qIntent.type === 'customer_query') {
-            // Customer naam dhundo
             var cMatches = searchCustomers(text, invoiceMap);
 
             if (cMatches.length === 0) {
-                // Date-only query (today/this week) — date-wise summary do
+                // Date-only query without customer name
                 if (qIntent.dateFilter !== 'all') {
                     var dateSummary = getDateWiseSummary(invoiceMap, qIntent.dateFilter);
                     await sendText(from, dateSummary);
@@ -619,19 +722,20 @@ module.exports = async function(req, res) {
                 return res.status(200).json({status:'ok'});
             }
 
-            if (cMatches.length === 1) {
-                var cReport = getCustomerReport(cMatches[0].name, invoiceMap, qIntent.dateFilter);
-                await sendText(from, cReport);
+            // ✅ If multiple matches, ask user to confirm with numbers
+            if (cMatches.length > 1) {
+                var cMsg = '*Multiple customers found. Kaunsa customer? Number reply karein:*\n\n';
+                cMatches.forEach(function(c,i){ cMsg += (i+1)+'. '+c.name+'\n'; });
+                var cPend = { type:'customer_select', matches:cMatches, dateFilter:qIntent.dateFilter, ts:Date.now() };
+                if (database) try { await database.ref('pending/'+safeFrom).set(cPend); } catch(e){}
+                memoryPending[safeFrom] = cPend;
+                await sendText(from, cMsg);
                 return res.status(200).json({status:'ok'});
             }
 
-            // Multiple customer matches → Show numbered selection
-            var cMsg = '*Kaunse customer ka data? Number reply karein:*\n\n';
-            cMatches.forEach(function(c,i){ cMsg += (i+1)+'. '+c.name+'\n'; });
-            var cPend = { type:'customer_select', matches:cMatches, dateFilter:qIntent.dateFilter, ts:Date.now() };
-            if (database) try { await database.ref('pending/'+safeFrom).set(cPend); } catch(e){}
-            memoryPending[safeFrom] = cPend;
-            await sendText(from, cMsg);
+            // ✅ Single match - show report
+            var cReport = getCustomerReport(cMatches[0].name, invoiceMap, qIntent.dateFilter);
+            await sendText(from, cReport);
             return res.status(200).json({status:'ok'});
         }
 
