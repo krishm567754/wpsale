@@ -22,7 +22,7 @@ function getFirebase() {
 
 function sanitizePath(str) { return str.replace(/[@.\[\]#\$\/]/g, '_'); }
 
-// ─── SETTINGS, WHITELIST & ADMINS ──────────────────────────────────────────
+// ─── SETTINGS, WHITELIST, BLACKLIST & ADMINS ──────────────────────────────
 async function isWhitelistActive() {
     var d = getFirebase(); if (!d) return false;
     try { var s = await d.ref('botConfig/whitelistActive').get(); return s.exists() ? s.val() : false; } catch(e) { return false; }
@@ -34,7 +34,15 @@ async function getAllowedNumbers() {
     try { var s = await d.ref('botConfig/allowedNumbers').get(); return s.exists() ? s.val() : {}; } catch(e) { return {}; }
 }
 async function allowNumber(num) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/allowedNumbers/' + num).set(true); } catch(e){} } }
-async function blockNumber(num) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/allowedNumbers/' + num).remove(); } catch(e){} } }
+async function disallowNumber(num) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/allowedNumbers/' + num).remove(); } catch(e){} } }
+
+// ✅ NEW BLACKLIST SYSTEM
+async function getBlockedNumbers() {
+    var d = getFirebase(); if (!d) return {};
+    try { var s = await d.ref('botConfig/blockedNumbers').get(); return s.exists() ? s.val() : {}; } catch(e) { return {}; }
+}
+async function blockNumber(num) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/blockedNumbers/' + num).set(true); } catch(e){} } }
+async function unblockNumber(num) { var d = getFirebase(); if (d) { try { await d.ref('botConfig/blockedNumbers/' + num).remove(); } catch(e){} } }
 
 async function getBotSettings() {
     var d = getFirebase(); 
@@ -181,8 +189,6 @@ function normalizeSizeHeader(header) {
     if (!header) return '';
     var h = String(header).toLowerCase().replace(/\s+/g,'').replace(/\/+$/,'').replace(/\\+$/,'');
     if (h.indexOf('brand') !== -1) return 'BRAND NAME';
-    
-    // Core fix: Normalize all ltr variations to just 'l' before checking map
     h = h.replace(/liters?|ltrs?|liter|litre|litres/g, 'l');
     
     var map = {'900ml':'900ML','0.9l':'900ML','900':'900ML','800ml':'800ML','0.8l':'800ML','600ml':'600ML','0.6l':'600ML','500ml':'500ML','0.5l':'500ML','350ml':'350ML','250ml':'250ML','175ml':'175ML','100ml':'100ML','1':'1L','1l':'1L','11':'1L','1.2/11':'1L','1.2/1l':'1L','1.2':'1.2L','1.2l':'1.2L','1.5':'1.5L','1.5l':'1.5L','2':'2L','2l':'2L','2.5':'2.5L','2.5l':'2.5L','2.51':'2.5L','3':'3L','3l':'3L','31':'3L','3.5':'3.5L','3.5l':'3.5L','4':'4L','4l':'4L','4.5':'4.5L','4.5l':'4.5L','5':'5L','5l':'5L','51':'5L','7':'7L','7l':'7L','71':'7L','7.5':'7.5L','7.5l':'7.5L','8.5':'8.5L','8.5l':'8.5L','10':'10L','10l':'10L','101':'10L','15':'15L','15l':'15L','18':'18L','18l':'18L','20':'20L','20l':'20L','201':'20L','50':'50L','50l':'50L','210':'210L'};
@@ -210,14 +216,11 @@ function loadPriceListFromExcel(wb) {
     return priceMap;
 }
 
-// ─── DEEP PRODUCT SEARCH WITH DECIMAL SUPPORT ──────────────────────────────
+// ─── DEEP PRODUCT SEARCH ──────────────────────────────
 function searchProducts(query, mrpMap, dlpMap) {
     if (query.startsWith('!')) return []; 
-    // Convert ltr, liters to l
     var q = query.toLowerCase().replace(/\b(?:ltrs?|liters?|liter|litre|litres)\b/g, 'l');
-    // Allow DOTS for decimals like 7.5
     q = q.replace(/[^a-z0-9.]/g, ' ');
-    
     var stopWords = ['price','rate','mrp','dlp','kya','hai','batao','aur','ka','ke','liye','ye','pucha','list'];
     var searchTerms = q.split(/\s+/).filter(function(w){ return w.length > 1 && stopWords.indexOf(w) === -1; });
     if (searchTerms.length === 0) return [];
@@ -253,12 +256,11 @@ function searchProducts(query, mrpMap, dlpMap) {
         for (var t = 0; t < searchTerms.length; t++) { 
             if (sStr.indexOf(searchTerms[t]) !== -1) {
                 score++; 
-                // Check if this term is exactly a size
                 for (var sz in combined[key].sizes) {
                     var nSz = sz.toLowerCase().replace(/[^a-z0-9.]/g, '');
                     if (searchTerms[t] === nSz || searchTerms[t] + 'l' === nSz || searchTerms[t] + 'ml' === nSz) {
                         hasSizeMatch = true;
-                        score += 2; // Priority for exact size match
+                        score += 2; 
                     }
                 }
             }
@@ -293,7 +295,7 @@ function searchStock(query, stockMap) {
         var score = 0;
         for (var t of searchTerms) { if (norm.includes(t)) score++; }
         if (score >= Math.min(2, Math.max(1, searchTerms.length - 1))) {
-            matches.push({ name: pName, pack: stockMap[pName].pack, ltr: stockMap[pName].ltr, score: score });
+            matches.push({ name: pName, pack: stockMap[pName].pack, score: score });
         }
     }
     matches.sort((a,b) => b.score - a.score);
@@ -546,6 +548,7 @@ async function loadAllData() {
     var mrpPdfFile  = fileList.find(function(f){ return f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); }); var listPdfFile = fileList.find(function(f){ return (f.toLowerCase().includes('list')||f.toLowerCase().includes('dlp')) && !f.toLowerCase().includes('mrp') && f.match(/\.pdf$/i); });
     var mrpPdfUrl   = mrpPdfFile  ? base+'/'+encodeURIComponent(mrpPdfFile)  : ''; var listPdfUrl  = listPdfFile ? base+'/'+encodeURIComponent(listPdfFile) : '';
 
+    // ✅ ROBUST STOCK PARSING
     var stockFile = fileList.find(function(f){ return f.toLowerCase().includes('stock') && f.match(/\.(xlsx|xls|csv)$/i); });
     var stockMap = {};
     if (stockFile) {
@@ -559,11 +562,13 @@ async function loadAllData() {
                     var pName = r['Product Description'] || r['Product Name'] || r['Item Name'] || r['Description'];
                     if (!pName) continue;
                     pName = String(pName).trim();
-                    if (!stockMap[pName]) stockMap[pName] = { pack: 0, ltr: 0 };
-                    var pack = parseFloat(r['Qty(Pack)'] || r['Pack Qty'] || r['Qty']) || 0;
-                    var ltr = parseFloat(r['Qty(EA/Ltrs/Kg)'] || r['Ltrs'] || r['Volume']) || 0;
-                    stockMap[pName].pack += pack;
-                    stockMap[pName].ltr += ltr;
+                    if (!stockMap[pName]) stockMap[pName] = { pack: 0 };
+                    
+                    var qty = parseFloat(r['Qty(Pack)'] || r['Pack Qty'] || r['Qty']) || 0;
+                    var alloc = parseFloat(r['Allocated Stock(Pack)'] || r['Allocated'] || r['Allocated Stock']) || 0;
+                    
+                    // Available Qty = Total Qty - Allocated Qty
+                    stockMap[pName].pack += (qty - alloc);
                 }
             }
         } catch(e){}
@@ -603,16 +608,32 @@ module.exports = async function(req, res) {
         var safeFrom = sanitizePath(from);
         var database = getFirebase();
 
-        var results = await Promise.all([getSystemPrompt(), loadAllData(), getPDFList(), isWhitelistActive(), getAllowedNumbers(), getBotSettings(), getAdmins()]);
+        var results = await Promise.all([
+            getSystemPrompt(), loadAllData(), getPDFList(), 
+            isWhitelistActive(), getAllowedNumbers(), 
+            getBotSettings(), getAdmins(), getBlockedNumbers()
+        ]);
         var sysPrompt = results[0]; var dataResult = results[1]||{}; var savedPDFs = results[2];
-        var wlActive = results[3]; var allowedNums = results[4]; var settings = results[5]; var adminDict = results[6];
+        var wlActive = results[3]; var allowedNums = results[4]; var settings = results[5]; 
+        var adminDict = results[6]; var blockedNums = results[7];
         
         var invoiceMap = dataResult.invoiceMap || {}; var mrpMap = dataResult.mrpMap || {}; var dlpMap = dataResult.dlpMap || {}; var allRows = dataResult.allRows || [];
 
         var isAdmin = (pureNumber === envAdmin) || adminDict[pureNumber];
 
+        // ── 🚨 BLACKLIST SECURITY CHECK 🚨 ──
+        if (blockedNums[pureNumber] && !isAdmin) {
+            console.log('[BLACKLIST] Ignored blocked number: ' + pureNumber);
+            return res.status(200).send('Blocked by Blacklist'); 
+        }
+
         if (!settings.botEnabled && !isAdmin) return res.status(200).send('Bot is OFF');
-        if (!isAdmin && wlActive && !allowedNums[pureNumber]) return res.status(200).send('Blocked by Whitelist'); 
+        
+        // ── 🚨 WHITELIST SECURITY CHECK 🚨 ──
+        if (!isAdmin && wlActive && !allowedNums[pureNumber]) {
+            console.log('[WHITELIST] Ignored un-whitelisted number: ' + pureNumber);
+            return res.status(200).send('Blocked by Whitelist'); 
+        }
 
         // ── PENDING SELECTION (Menu Choices) ──────────────────────────────────
         if (/^\d+$/.test(text)) {
@@ -633,7 +654,7 @@ module.exports = async function(req, res) {
                     else if (pending.type === 'customer_report') { var cReport = getCustomerReport(pending.matches[idx].name, invoiceMap, pending.dateRange, pending.lastOnly); await sendText(from, cReport); }
                     else if (pending.type === 'stock') {
                         var sm = pending.matches[idx];
-                        var sMsg = '*Stock Details*\nProduct: ' + sm.name + '\nQty (Pack): ' + sm.pack.toFixed(2) + '\nQty (Ltrs/Kg): ' + sm.ltr.toFixed(2) + '\n\n*(Note: Stock may vary)*';
+                        var sMsg = '*Stock Details*\nProduct: ' + sm.name + '\nAvailable Qty: ' + sm.pack.toFixed(2) + ' Pack\n\n*(Note: Stock may vary)*';
                         await sendText(from, sMsg);
                     }
                     
@@ -660,11 +681,15 @@ module.exports = async function(req, res) {
             if (text === '!stock off') { await updateBotSetting('stockEnabled', false); await sendText(from, '🔴 *Stock is now OFF*\nKoi bhi customer stock nahi dekh paayega.'); return res.status(200).json({status: 'ok'}); }
             if (text === '!stock on') { await updateBotSetting('stockEnabled', true); await sendText(from, '🟢 *Stock is now ON*\nStock check public ke liye active hai.'); return res.status(200).json({status: 'ok'}); }
 
+            // Whitelist Commands
             if (text === '!whitelist on') { await setWhitelistActive(true); await sendText(from, '🔒 *Whitelist ON*\nSirf allowed numbers allowed hain.'); return res.status(200).json({ status: 'ok' }); }
             if (text === '!whitelist off') { await setWhitelistActive(false); await sendText(from, '🔓 *Whitelist OFF*\nBot sabke liye khula hai.'); return res.status(200).json({ status: 'ok' }); }
+            if (text.indexOf('!allow ') === 0) { var wNum = text.slice(7).trim(); await allowNumber(wNum); await sendText(from, '✅ *' + wNum + '* ko whitelist access mil gaya.'); return res.status(200).json({ status: 'ok' }); }
+            if (text.indexOf('!disallow ') === 0) { var dwNum = text.slice(10).trim(); await disallowNumber(dwNum); await sendText(from, '❌ *' + dwNum + '* ko whitelist se hata diya gaya.'); return res.status(200).json({ status: 'ok' }); }
             
-            if (text.indexOf('!allow ') === 0) { var wNum = text.slice(7).trim(); await allowNumber(wNum); await sendText(from, '✅ *' + wNum + '* ko access mil gaya.'); return res.status(200).json({ status: 'ok' }); }
-            if (text.indexOf('!block ') === 0) { var bNum = text.slice(7).trim(); await blockNumber(bNum); await sendText(from, '❌ *' + bNum + '* block ho gaya.'); return res.status(200).json({ status: 'ok' }); }
+            // Blacklist Commands
+            if (text.indexOf('!block ') === 0) { var bNum = text.slice(7).trim(); await blockNumber(bNum); await sendText(from, '🚫 *' + bNum + '* ko hamesha ke liye block kar diya gaya hai.'); return res.status(200).json({ status: 'ok' }); }
+            if (text.indexOf('!unblock ') === 0) { var ubNum = text.slice(9).trim(); await unblockNumber(ubNum); await sendText(from, '✅ *' + ubNum + '* ko unblock kar diya gaya hai.'); return res.status(200).json({ status: 'ok' }); }
             
             if (text.indexOf('!addadmin ') === 0) { var aNum = text.slice(10).trim(); await addAdminNumber(aNum); await sendText(from, '👑 *' + aNum + '* ab Admin ban gaya hai.'); return res.status(200).json({ status: 'ok' }); }
             
@@ -677,7 +702,8 @@ module.exports = async function(req, res) {
             if (text === '!commands') {
                 var cMsg = "👑 *Admin Master Commands:*\n\n" +
                            "🤖 *Bot Toggles:*\n!bot on / !bot off\n!ai on / !ai off\n!stock on / !stock off\n\n" +
-                           "🔒 *Security:*\n!whitelist on / !whitelist off\n!allow <9199XXXXXX>\n!block <9199XXXXXX>\n!listallowed\n\n" +
+                           "🔒 *Whitelist (Private Mode):*\n!whitelist on / !whitelist off\n!allow <9199XXXXXX>\n!disallow <9199XXXXXX>\n!listallowed\n\n" +
+                           "🚫 *Blacklist (Block Users):*\n!block <9199XXXXXX>\n!unblock <9199XXXXXX>\n\n" +
                            "👨‍💼 *Roles:*\n!addadmin <9199XXXXXX>\n\n" +
                            "🛠️ *System:*\n!status\n!clearcache\n!setprompt <text>\n\n" +
                            "💬 *Ask AI:*\n!ask <question>";
@@ -734,13 +760,16 @@ module.exports = async function(req, res) {
 
             var sMatches = searchStock(cleanStockQuery, dataResult.stockMap || {});
             
+            // Filter out items with 0 or negative available stock
+            sMatches = sMatches.filter(sm => sm.pack > 0);
+
             if (sMatches.length === 0) {
-                await sendText(from, 'Bhai, is product ka koi stock list mein nahi mila.');
+                await sendText(from, 'Bhai, is product ka koi stock list mein nahi mila ya fir out of stock hai.');
                 return res.status(200).json({status:'ok'});
             }
             if (sMatches.length === 1) {
                 var sm = sMatches[0];
-                var sMsg = '*Stock Details*\nProduct: ' + sm.name + '\nQty (Pack): ' + sm.pack.toFixed(2) + '\nQty (Ltrs/Kg): ' + sm.ltr.toFixed(2) + '\n\n*(Note: Stock may vary)*';
+                var sMsg = '*Stock Details*\nProduct: ' + sm.name + '\nAvailable Qty: ' + sm.pack.toFixed(2) + ' Pack\n\n*(Note: Stock may vary)*';
                 await sendText(from, sMsg);
                 return res.status(200).json({status:'ok'});
             }
@@ -843,7 +872,7 @@ module.exports = async function(req, res) {
             var isCustomAnalytics = ['sabse', 'kam', 'lowest', 'low', 'aaj', 'kal', 'din', 'bika', 'invoice', 'bill', 'hisab'].some(function(w){return lower.includes(w);});
 
             if (isCustomAnalytics) {
-                var aiPrompt = 'You are a Data Analyst. Answer the user query using ONLY the [FULL BUSINESS LEDGER] below.\n\nRULES:\n1. If asked about lowest/highest selling or specific queries, find it in the data.\n2. Write in plain Hinglish. NO EMOJIS.\n3. Add EXACTLY this line at the end of your answer: "\n*(Note: Data may incorrect please reverify)*"\n4. If data is not found or query is completely unrelated, reply EXACTLY: "Please wait, admin will reply soon."';
+                var aiPrompt = 'You are a Data Analyst. Answer the user query using ONLY the [FULL BUSINESS LEDGER] below.\n\nRULES:\n1. Answer clearly based ONLY on the provided data.\n2. Write in plain Hinglish. NO EMOJIS.\n3. Add EXACTLY this line at the end of your response: "\n*(Note: Data may incorrect please reverify)*"\n4. If data is not found, output EXACTLY: "Please wait, admin will reply soon."';
                 var bizSummary = generateDeepBusinessSummary(allRows);
                 var aiReply = await getAIReply(text, bizSummary, aiPrompt);
                 
